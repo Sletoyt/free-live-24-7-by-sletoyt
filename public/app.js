@@ -104,11 +104,16 @@ function isCodespacesHost() {
   return h.endsWith('.app.github.dev') || h.endsWith('.github.dev');
 }
 
+function isBotkeepHost() {
+  const h = window.location.hostname || '';
+  return h.includes('botkeep') || Boolean(tunnelInfo && tunnelInfo.isBotkeep);
+}
+
 function getRecommendedObsServerUrl() {
   if (tunnelInfo && tunnelInfo.publicRtmpUrl) {
     return tunnelInfo.publicRtmpUrl;
   }
-  if (isCodespacesHost()) {
+  if (isCodespacesHost() || isBotkeepHost()) {
     return 'Connecting Tunnel... (Click Refresh Tunnel)';
   }
   const host = window.location.hostname || 'localhost';
@@ -126,7 +131,9 @@ function updateTunnelUiBanner() {
 
   if (hint) {
     if (tunnelInfo && tunnelInfo.publicRtmpUrl) {
-      hint.textContent = '✅ Public TCP Tunnel Active — Paste this exact Server URL in OBS Studio (works on Codespaces & VPS).';
+      hint.textContent = '✅ Public TCP Tunnel Active — Paste this exact Server URL in OBS Studio (works on Botkeep, Colab, Codespaces & VPS).';
+    } else if (isBotkeepHost()) {
+      hint.textContent = '⏳ Botkeep Ingest Tunnel Connecting — Paste this Server URL in OBS Studio when ready.';
     } else if (isCodespacesHost()) {
       hint.textContent = '⏳ Starting built-in SSH TCP Tunnel for GitHub Codespaces...';
     } else {

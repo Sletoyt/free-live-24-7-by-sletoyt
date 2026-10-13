@@ -28,12 +28,65 @@
 
 ## 🚀 1. Installation & Cloud Setup Guide
 
-You can deploy and run this tool within minutes on any **Ubuntu / Debian VPS** or directly inside **GitHub Codespaces**.
-
+You can deploy and run this tool within minutes on **Botkeep**, **Google Colab**, **Ubuntu / Debian VPS**, or directly inside **GitHub Codespaces**.
 
 ---
 
-### Method A: Ubuntu / Debian VPS via Docker Compose (Recommended)
+### Method A: Botkeep Cloud Hosting (Node.js 22)
+
+1. In your **Botkeep** dashboard (`botkeep.cloud`), create a new Node.js app and link your GitHub repo:
+   ```text
+   https://github.com/sletoyt/free-live-24-7-by-sletoyt
+   ```
+2. Botkeep automatically runs `npm install` and executes `npm start`.
+3. The server automatically detects Botkeep's dynamic **`SERVER_PORT`** and binds to `0.0.0.0`.
+4. **Access your Web Dashboard:**
+   - Use your assigned endpoint under the **Network** tab (e.g. `http://node7.botkeep.cloud:40325`).
+   - Or open your custom domain under the **Domains** tab (e.g. `https://free-live.bot-keep.xyz`).
+   - Or click the **`Auto Public Web Link`** (`https://...loca.lt` / `https://...a.pinggy.link`) printed right in the Botkeep console!
+5. **Connect Local OBS Studio:**
+   - In your PC OBS Studio, go to `Settings -> Stream -> Custom`.
+   - Set **Server** to the **Public OBS RTMP Server Link** (`rtmp://...a.pinggy.link:PORT/live`) printed in the Botkeep console or shown on the dashboard.
+   - Set **Stream Key** to `live_sleto` (or your configured channel key) and click **Start Streaming**!
+
+---
+
+### Method B: Google Colab (Free Cloud Playout)
+
+Open a new notebook in **Google Colab** and run this single code cell:
+
+```python
+!git clone https://github.com/sletoyt/free-live-24-7-by-sletoyt.git
+%cd free-live-24-7-by-sletoyt
+!sudo apt-get update && sudo apt-get install -y ffmpeg openssh-client
+!npm install
+!npm start
+```
+
+- In the cell output, click the generated **`🌐 Public Web Dashboard`** link (`https://...loca.lt` / `https://...a.pinggy.link`).
+- In OBS Studio on your PC, paste the generated **`🔗 Public OBS RTMP Server`** (`rtmp://...a.pinggy.link:PORT/live`) and click **Start Streaming**!
+
+---
+
+### Method C: GitHub Codespaces (Auto Port Forwarding & OBS Tunnel)
+
+Paste the following command directly into your GitHub Codespaces terminal:
+
+```bash
+cd /workspaces/free-live-24-7-by-sletoyt
+docker compose down 2>/dev/null || true
+rm -rf free-live-24-7-by-sletoyt
+git fetch origin main && git reset --hard origin/main
+sudo apt-get update && sudo apt-get install -y ffmpeg openssh-client
+npm install
+npm start
+```
+
+> **Note:** Once `npm start` executes, your terminal will display the **`Codespaces Web UI URL`** along with a ready-to-use **`Public OBS RTMP Server Link`** (`rtmp://...a.pinggy.link:PORT/live`).
+
+---
+
+### Method D: Ubuntu / Debian VPS via Docker Compose (Recommended)
 
 Log in to your VPS terminal and run:
 
@@ -50,9 +103,7 @@ http://YOUR_VPS_IP:3000
 
 ---
 
-### Method B: Ubuntu / Debian VPS Direct Installation (Without Docker)
-
-If you prefer running directly with Node.js and FFmpeg without containerization:
+### Method E: Ubuntu / Debian VPS Direct Installation (Without Docker)
 
 ```bash
 # 1. Update packages and install dependencies
@@ -71,24 +122,6 @@ Open `http://YOUR_VPS_IP:3000` in your web browser.
 
 ---
 
-### Method C: GitHub Codespaces (Auto Port Forwarding & OBS Tunnel)
-
-Paste the following command directly into the GitHub Codespaces terminal:
-
-```bash
-cd /workspaces/free-live-24-7-by-sletoyt
-docker compose down 2>/dev/null || true
-rm -rf free-live-24-7-by-sletoyt
-git fetch origin main && git reset --hard origin/main
-sudo apt-get update && sudo apt-get install -y ffmpeg openssh-client
-npm install
-npm start
-```
-
-> **Note:** Once `npm start` executes, your terminal will display the **`Codespaces Web UI URL`** along with a ready-to-use **`Public OBS RTMP Server Link`** (`rtmp://...a.pinggy.link:PORT/live`).
-
----
-
 ## ✨ 2. Key Features
 
 ### 🌙 1. Dark Sky & Sakura Theme (with Light Mode Toggle)
@@ -96,7 +129,7 @@ npm start
 - Seamlessly toggle between dark and light modes using the top navigation bar switch.
 
 ### 🔗 2. Built-in Automatic OBS RTMP Tunnel (Fixes `Failed to Connect`)
-- Cloud platforms (like GitHub Codespaces or restricted VPS setups) often block port `1935`, causing OBS to throw `Failed to connect to server`.
+- Cloud platforms (like Botkeep, Google Colab, GitHub Codespaces, or restricted VPS setups) often block port `1935`, causing OBS to throw `Failed to connect to server`.
 - An automatic **Public TCP Tunnel (`rtmp://...a.pinggy.link:PORT/live`)** is created and displayed directly on the dashboard. Copy this address into OBS to connect immediately without port forwarding.
 
 ### ⚡ 3. Ultra-Lightweight Architecture (Low CPU & RAM Footprint)

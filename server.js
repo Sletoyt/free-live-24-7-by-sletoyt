@@ -16,7 +16,7 @@ const io = new Server(server, {
   maxHttpBufferSize: 5e7
 });
 
-const PORT = parseInt(process.env.PORT, 10) || 3000;
+const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000, 10);
 
 function ensureWritableDir(dirPath, fallbackName) {
   try {
@@ -924,6 +924,9 @@ const tunnelState = {
   active: false,
   status: 'starting',
   publicRtmpUrl: null,
+  publicWebUrl: null,
+  botkeepUrl: process.env.SERVER_PORT ? `http://node7.botkeep.cloud:${PORT}` : null,
+  codespacesUrl: process.env.CODESPACE_NAME ? `https://${process.env.CODESPACE_NAME}-${PORT}.${process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN || 'app.github.dev'}` : null,
   hostPort: null,
   provider: 'pinggy-tcp',
   updatedAt: null
@@ -931,9 +934,82 @@ const tunnelState = {
 
 let tunnelProc = null;
 let tunnelRetryTimer = null;
+let webTunnelProc = null;
+let webTunnelRetryTimer = null;
+
+let localtunnelModule = null;
+try {
+  localtunnelModule = require('localtunnel');
+} catch (_) {}
 
 function stripAnsi(str) {
   return String(str || '').replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
+}
+
+async function startWebTunnel() {
+  if (localtunnelModule) {
+    try {
+      const lt = await localtunnelModule({ port: PORT });
+      if (lt && lt.url) {
+        tunnelState.publicWebUrl = lt.url;
+        tunnelState.updatedAt = new Date().toISOString();
+        addLog('INFO', `Public Web Dashboard Ready: ${lt.url}`, 'TUNNEL');
+        origLog(`  🌐 Public Web Dashboard:  ${lt.url}`);
+        io.emit('tunnel-update', tunnelState);
+        lt.on('close', () => setTimeout(startWebTunnel, 5000));
+        lt.on('error', () => setTimeout(startWebTunnel, 5000));
+        return;
+      }
+    } catch (_) {}
+  }
+
+  if (webTunnelRetryTimer) clearTimeout(webTunnelRetryTimer);
+  if (webTunnelProc) {
+    try { webTunnelProc.kill('SIGKILL'); } catch (_) {}
+    webTunnelProc = null;
+  }
+
+  const sshArgs = [
+    '-p', '443',
+    '-o', 'StrictHostKeyChecking=no',
+    '-o', 'UserKnownHostsFile=/dev/null',
+    '-o', 'ServerAliveInterval=30',
+    '-o', 'ConnectTimeout=12',
+    '-T',
+    `-R0:127.0.0.1:${PORT}`,
+    'a.pinggy.io'
+  ];
+
+  try {
+    const proc = spawn('ssh', sshArgs);
+    webTunnelProc = proc;
+
+    const handleWebOutput = (chunk) => {
+      const text = stripAnsi(chunk.toString());
+      const match = text.match(/(https?:\/\/[a-zA-Z0-9.-]+\.pinggy\.(?:link|io|online)(?::\d+)?)/i);
+      if (match && match[1]) {
+        const url = match[1].trim();
+        if (tunnelState.publicWebUrl !== url) {
+          tunnelState.publicWebUrl = url;
+          tunnelState.updatedAt = new Date().toISOString();
+          addLog('INFO', `Public Web Dashboard Ready: ${url}`, 'TUNNEL');
+          origLog(`  🌐 Public Web Dashboard:  ${url}`);
+          io.emit('tunnel-update', tunnelState);
+        }
+      }
+    };
+
+    proc.stdout.on('data', handleWebOutput);
+    proc.stderr.on('data', handleWebOutput);
+
+    proc.on('close', () => {
+      if (webTunnelProc === proc) {
+        webTunnelProc = null;
+        webTunnelRetryTimer = setTimeout(startWebTunnel, 5000);
+      }
+    });
+    proc.on('error', () => {});
+  } catch (_) {}
 }
 
 function startRtmpTunnel() {
@@ -1010,13 +1086,20 @@ function startRtmpTunnel() {
 }
 
 startRtmpTunnel();
+startWebTunnel();
 
 app.get('/api/tunnel', (req, res) => {
-  res.json(tunnelState);
+  res.json({
+    ...tunnelState,
+    port: PORT,
+    isBotkeep: Boolean(process.env.SERVER_PORT),
+    botkeepUrl: process.env.SERVER_PORT ? `http://node7.botkeep.cloud:${PORT}` : null
+  });
 });
 
 app.post('/api/tunnel/restart', (req, res) => {
   startRtmpTunnel();
+  startWebTunnel();
   res.json({ success: true, tunnelState });
 });
 
@@ -1373,17 +1456,22 @@ server.listen(PORT, '0.0.0.0', () => {
   addLog('INFO', `RTMP Ingest Server listening on port ${rtmpPort}`, 'BOOT');
   addLog('INFO', `HTTP-FLV Preview Server on port ${httpPort}`, 'BOOT');
 
+  const isBotkeep = Boolean(process.env.SERVER_PORT);
   const codespaceName = process.env.CODESPACE_NAME;
   const forwardingDomain = process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN || 'app.github.dev';
   const codespaceUrl = codespaceName ? `https://${codespaceName}-${PORT}.${forwardingDomain}` : null;
 
   origLog('================================================================');
   origLog('  ☁️ FREE-LIVE-24-7-BY-SLETOYT SKY CLOUD SERVER READY 🌸');
-  origLog(`  Local Web UI:       http://localhost:${PORT}`);
-  if (codespaceUrl) {
-    origLog(`  Codespaces Web UI:  ${codespaceUrl}`);
+  origLog(`  Local Container URL: http://0.0.0.0:${PORT} (or http://localhost:${PORT})`);
+  if (isBotkeep) {
+    origLog(`  🌐 Botkeep Assigned: http://node7.botkeep.cloud:${PORT}`);
+    origLog(`  🌐 Botkeep Domain:   https://free-live.bot-keep.xyz (or your attached domain)`);
   }
-  origLog(`  RTMP Ingest Port:   ${rtmpPort}`);
-  origLog(`  HTTP-FLV Port:      ${httpPort}`);
+  if (codespaceUrl) {
+    origLog(`  🌐 Codespaces Web:   ${codespaceUrl}`);
+  }
+  origLog(`  📡 RTMP Ingest Port: ${rtmpPort}`);
+  origLog(`  🎥 HTTP-FLV Port:    ${httpPort}`);
   origLog('================================================================');
 });
