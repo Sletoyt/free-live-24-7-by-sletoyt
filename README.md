@@ -9,19 +9,36 @@
 [![Theme](https://img.shields.io/badge/Theme-Dark_Sky_%26_Sakura-0ea5e9?style=for-the-badge)](#)
 [![License](https://img.shields.io/badge/License-MIT-10b981?style=for-the-badge)](LICENSE)
 
-**Send your PC Window + Voiceover from OBS Studio once — `free-live-24-7-by-sletoyt` automatically switches scenes by screen color or signal status and streams to both `16:9 Landscape` and `9:16 Vertical Shorts` at the same time.**
+**Send your PC Window feed and voiceover from OBS Studio once — `free-live-24-7-by-sletoyt` handles the rest! It automatically triggers smart scene transitions based on screen color or connection health and broadcasts to both `16:9 Landscape` and `9:16 Vertical Shorts` simultaneously.**
+
+---
+
+### 🌟 Key Highlights at a Glance
+| Feature | Description |
+| :--- | :--- |
+| **Simultaneous Dual Broadcast** | Stream to YouTube Landscape (`16:9`) and YouTube Shorts (`9:16`) at the same time. |
+| **Smart Color Switcher** | Auto-switches scenes when a specific screen color is detected (e.g., pause screens). |
+| **Network Fail-Safe** | Auto-displays an error scene if your PC disconnects, keeping the 24/7 stream alive. |
+| **Zero-Config OBS Tunnel** | Built-in TCP tunneling solves firewall and port-forwarding issues out of the box. |
+| **Ultra-Low Resource Usage**| Optimized pipeline consuming minimal CPU and RAM on VPS / Cloud instances. |
 
 </div>
 
 ---
 
-## 🚀 1. VPS और Cloud में Add / Install करने की पूरी Process
+## 🚀 1. Installation & Cloud Setup Guide
 
-आप इस टूल को किसी भी **Ubuntu / Debian VPS** या **GitHub Codespaces** पर कुछ ही सेकंड में चला सकते हैं।
+You can deploy and run this tool within minutes on any **Ubuntu / Debian VPS** or directly inside **GitHub Codespaces**.
 
-### A. Ubuntu / Debian VPS पर चलाने की Process (Docker Compose)
+```
+  [ Local PC / OBS ] ──(RTMP Stream)──► [ Cloud VPS / Codespaces ] ──► [ YouTube Live 16:9 + 9:16 ]
+```
 
-अपने VPS टर्मिनल में लॉगिन करें और ये कमांड्स चलाएं:
+---
+
+### Method A: Ubuntu / Debian VPS via Docker Compose (Recommended)
+
+Log in to your VPS terminal and run:
 
 ```bash
 git clone https://github.com/sletoyt/free-live-24-7-by-sletoyt.git
@@ -29,26 +46,37 @@ cd free-live-24-7-by-sletoyt
 docker compose up -d --build
 ```
 
-अब अपने ब्राउज़र में खोलें:
+Access the Web Control Panel in your browser:
 ```text
 http://YOUR_VPS_IP:3000
 ```
 
-### B. Ubuntu / Debian VPS पर बिना Docker के Direct चलाने की Process
+---
 
-अगर आप बिना Docker के सीधा Node.js और FFmpeg के साथ चलाना चाहते हैं:
+### Method B: Ubuntu / Debian VPS Direct Installation (Without Docker)
+
+If you prefer running directly with Node.js and FFmpeg without containerization:
 
 ```bash
+# 1. Update packages and install dependencies
 sudo apt-get update && sudo apt-get install -y nodejs npm ffmpeg openssh-client
+
+# 2. Clone the repository
 git clone https://github.com/sletoyt/free-live-24-7-by-sletoyt.git
 cd free-live-24-7-by-sletoyt
+
+# 3. Install packages and start the engine
 npm install
 npm start
 ```
 
-### C. GitHub Codespaces में चलाने की Process (Auto Port & Auto OBS Tunnel)
+Open `http://YOUR_VPS_IP:3000` in your web browser.
 
-GitHub Codespaces के टर्मिनल में यह कमांड पेस्ट करें:
+---
+
+### Method C: GitHub Codespaces (Auto Port Forwarding & OBS Tunnel)
+
+Paste the following command directly into the GitHub Codespaces terminal:
 
 ```bash
 cd /workspaces/free-live-24-7-by-sletoyt
@@ -60,76 +88,100 @@ npm install
 npm start
 ```
 
-- जैसे ही `npm start` चलेगा, टर्मिनल में आपको सीधा **`Codespaces Web UI`** का लिंक और **`Public OBS RTMP Server`** (`rtmp://...a.pinggy.link:PORT/live`) मिल जाएगा।
+> **Note:** Once `npm start` executes, your terminal will display the **`Codespaces Web UI URL`** along with a ready-to-use **`Public OBS RTMP Server Link`** (`rtmp://...a.pinggy.link:PORT/live`).
 
 ---
 
-## ✨ 2. इसके सारे Features (All Features)
+## ✨ 2. Key Features
 
-### 🌙 1. Dark Sky & Sakura Theme (Light Mode Toggle के साथ)
-- डिफ़ॉल्ट रूप से यह आंखों को आराम देने वाले **Midnight Dark Sky & Sakura Theme** में खुलता है।
-- ऊपर दिए गए **Light Sky / Dark Sky** बटन से आप कभी भी डार्क और लाइट मोड के बीच स्विच कर सकते हैं।
+### 🌙 1. Dark Sky & Sakura Theme (with Light Mode Toggle)
+- Features a clean, eye-friendly **Midnight Dark Sky & Sakura Theme** out of the box.
+- Seamlessly toggle between dark and light modes using the top navigation bar switch.
 
-### 🔗 2. Built-in Automatic OBS RTMP Tunnel (`Failed to Connect` Fix)
-- GitHub Codespaces या फ़ायरवॉल वाले सर्वर में पोर्ट `1935` ब्लॉक होने की वजह से OBS में `Failed to connect to server` आता था।
-- अब यह टूल अपने आप एक **Public TCP Tunnel (`rtmp://...a.pinggy.link:PORT/live`)** बनाता है जो डैशबोर्ड पर सबसे ऊपर दिखता है। इसे कॉपी करके OBS में डालने पर OBS तुरंत कनेक्ट हो जाता है।
+### 🔗 2. Built-in Automatic OBS RTMP Tunnel (Fixes `Failed to Connect`)
+- Cloud platforms (like GitHub Codespaces or restricted VPS setups) often block port `1935`, causing OBS to throw `Failed to connect to server`.
+- An automatic **Public TCP Tunnel (`rtmp://...a.pinggy.link:PORT/live`)** is created and displayed directly on the dashboard. Copy this address into OBS to connect immediately without port forwarding.
 
-### ⚡ 3. Ultra-Lightweight Architecture (कम RAM और कम CPU खपत)
-- सारे फीचर्स रखते हुए इसे बेहद हल्का (Lightweight) बनाया गया है:
-  - FFmpeg में `ultrafast` और `zerolatency` प्रोफाइल का उपयोग।
-  - बैकएंड कलर डिटेक्टर सिर्फ `8x8` पिक्सेल ग्रिड को `1 FPS` पर चेक करता है जिससे CPU लगभग `0%` खर्च होता है।
-  - जब आप Studio टैब के बाहर होते हैं, तो ब्राउज़र कैनवास रेंडरिंग अपने आप थ्रॉटल हो जाती है।
+### ⚡ 3. Ultra-Lightweight Architecture (Low CPU & RAM Footprint)
+- Engineered for budget-friendly cloud instances:
+  - **FFmpeg Engine:** Configured with `ultrafast` and `zerolatency` profiles.
+  - **Color Detector:** Checks an ultra-efficient `8x8` pixel grid at `1 FPS`, resulting in nearly `0%` CPU utilization.
+  - **Browser Optimization:** Throttles canvas rendering automatically whenever you navigate away from the Studio tab.
 
-### 🎬 4. Multi-Scene System (Live के दौरान भी Scene Add और Switch करें)
-- आप एक ही लाइव चैनल में अनलिमिटेड सीन बना सकते हैं और लाइव चलते समय भी उन्हें 1-क्लिक में बदल सकते हैं।
-- इसमें **3 प्रकार के विशेष सीन (Scene Types)** हैं:
-  1. **🟢 Default Scene (अधिकतम 1):** जब आपकी लाइव चालू हो और स्क्रीन पर कोई ट्रिगर कलर न हो, तब यही मुख्य सीन चलता है।
-  2. **🎨 Color-Detect Scene (Multiple):** इसमें आप कोई भी कलर कोड (जैसे `#000000` या `#38bdf8`) सेट कर सकते हैं। जब पूरी स्क्रीन पर वह रंग आता है, तो लाइव अपने आप इस सीन पर स्विच हो जाती है, और रंग हटते ही वापस **Default Scene** पर आ जाती है।
-  3. **📡 Network Error Scene:** जब आपके PC के OBS से सिग्नल आना बंद हो जाता है, तो यह सीन अपने आप चालू हो जाता है और OBS दोबारा कनेक्ट होते ही वापस **Default Scene** पर आ जाता है।
+### 🎬 4. Dynamic Multi-Scene Engine
+Create unlimited scenes and switch between them on the fly while streaming live.
 
-### 📺📱 5. Simultaneous Dual 16:9 & 9:16 Live Playout (Side-by-Side Editor)
-- **एक साथ 2 Live:** यह टूल एक ही समय पर **16:9 (YouTube Landscape)** और **9:16 (YouTube Shorts / Vertical)** दोनों स्ट्रीम कीज़ पर लाइव करता है।
-- **Shared Sources, Independent Positions:** किसी भी सीन में जोड़ा गया सोर्स (Window Feed, Logo, Video, Text, BG Music) अपने आप `16:9` और `9:16` दोनों स्क्रीन में जुड़ जाता है।
-- दोनों एडिट स्क्रीन (`16:9` और `9:16`) एक साथ अगल-बगल दिखती हैं ताकि आप एक ही सोर्स को `16:9` में अलग जगह और `9:16` में अलग जगह सेट कर सकें।
-- जब सीन बदलता है, तो `16:9` और `9:16` दोनों में एक साथ सिंक होकर बदलता है।
+```
+                          ┌───► 🟢 Default Scene (Active gameplay / main feed)
+                          │
+Incoming Video Stream ────┼───► 🎨 Color-Detect Scene (Matches HEX code -> Pause/Overlay)
+                          │
+                          └───► 📡 Network Error Scene (Triggered if OBS drops signal)
+```
 
-### 📁 6. Built-in Cloud File System
-- अपना **Background Music (`.mp3`, `.wav`)**, **Logos (`.png`, `.gif`)** और **Video Loops (`.mp4`, `.webm`)** सीधे टूल के फाइल सिस्टम में अपलोड करें।
-- किसी भी फाइल को कभी भी वापस अपने डिवाइस में **Download** करें, नाम बदलें, या सीधे किसी भी सीन में इस्तेमाल करें।
+1. **🟢 Default Scene (Max 1):** Your primary active live scene when no trigger colors are present.
+2. **🎨 Color-Detect Scene (Multiple):** Set any HEX color code (e.g., `#000000` or `#38bdf8`). When your screen matches that color, the live broadcast automatically transitions to this scene. Once the color clears, it returns to the Default Scene.
+3. **📡 Network Error Scene:** If your local OBS crashes or loses internet connection, this scene takes over immediately to keep your YouTube stream alive. Once OBS reconnects, it smoothly returns to your Default Scene.
 
-### 📖 7. Beginner-Friendly UI & Step-by-Step Guide Tab
-- नए यूज़र्स के लिए ऊपर नेविगेशन बार में **`📖 Guide (कैसे चलाएं)`** का अलग पेज दिया गया है जिसमें हर स्टेप आसान भाषा में समझाया गया है।
+### 📺📱 5. Dual 16:9 & 9:16 Playout (Side-by-Side Canvas Editor)
+- **Two Simultaneous Streams:** Pushes video to both **16:9 (Landscape YouTube)** and **9:16 (Vertical YouTube Shorts)** stream keys simultaneously.
+- **Shared Sources, Independent Layouts:** Add a source (Window Capture, Logo, Video Clip, Text, BGM) once, and it appears on both canvases. Position, scale, and adjust it independently for horizontal and vertical layouts.
+- **Synchronized Transitions:** Any scene switch happens synchronously across both aspect ratios.
+
+```
++---------------------------------------+   +-------------------+
+|            16:9 Landscape             |   |   9:16 Vertical   |
+|                                       |   |                   |
+|   [ Game Feed / Window Capture ]      |   |   [ Camera Feed ] |
+|                                       |   |                   |
+|                                       |   |   [ Game Feed ]   |
+|   [ Overlay / BGM ]    [ Logo ]       |   |   [ Chat / Logo ] |
++---------------------------------------+   +-------------------+
+```
+
+### 📁 6. Built-in Cloud Asset Manager
+- Upload and manage your **Background Music (`.mp3`, `.wav`)**, **Brand Logos (`.png`, `.gif`)**, and **Video Loops (`.mp4`, `.webm`)** right from the cloud dashboard.
+- Download, rename, delete, or link files into your scenes with one click.
+
+### 📖 7. Beginner-Friendly Onboarding
+- Includes an integrated **`📖 Guide`** tab with step-by-step instructions designed to help first-time streamers get up and running without technical roadblocks.
 
 ---
 
-## ⚙️ 3. यह कैसे काम करता है (How It Works)
+## ⚙️ 3. How It Works (Architecture Pipeline)
 
 ```mermaid
 flowchart TD
-    A["🖥️ Local PC OBS Studio<br/>(Window Capture + Voiceover)"] -->|"RTMP Stream (Direct IP or Built-in TCP Tunnel)"| B["☁️ Sleto Sky Cloud Server<br/>(Port 1935 Ingest)"]
+    A["🖥️ Local PC OBS Studio<br/>(Window Capture + Mic Audio)"] -->|"RTMP Stream (Direct IP or Built-in Tunnel)"| B["☁️ Sleto Sky Cloud Server<br/>(Port 1935 Ingest)"]
     B --> C{"🤖 Auto Scene & Color Engine"}
-    C -->|"Normal Gameplay / Screen"| D["🟢 Default Scene (Max 1)"]
-    C -->|"Full Screen Matches #HEX Color"| E["🎨 Color-Detect Scene (e.g. Pause)"]
-    C -->|"OBS Disconnected / Signal Lost"| F["📡 Network Error Scene"]
+    C -->|"Standard Video Signal"| D["🟢 Default Scene (Primary Feed)"]
+    C -->|"Screen Matches Trigger HEX Color"| E["🎨 Color-Detect Scene (e.g. Pause Overlay)"]
+    C -->|"OBS Disconnected / Network Loss"| F["📡 Network Error Scene (Fail-Safe)"]
     D & E & F --> G["🎛️ Dual Aspect-Ratio Compositor"]
-    G -->|"16:9 Layout + 16:9 Stream Key"| H["📺 YouTube 16:9 Landscape Live"]
-    G -->|"9:16 Layout + 9:16 Stream Key"| I["📱 YouTube 9:16 Vertical Shorts Live"]
+    G -->|"16:9 Layout + Landscape Stream Key"| H["📺 YouTube 16:9 Landscape Live"]
+    G -->|"9:16 Layout + Vertical Stream Key"| I["📱 YouTube 9:16 Vertical Shorts Live"]
 ```
 
-1. **Input (OBS से सिग्नल भेजना):**
-   - आप अपने PC के OBS में सिर्फ अपनी गेम/विंडो स्क्रीन और माइक ऑन करते हैं।
-   - डैशबोर्ड पर दिखने वाले **OBS Server URL** और **OBS Stream Key** (`live_sleto`) को अपने OBS (`Settings -> Stream -> Custom`) में डालकर **Start Streaming** दबाते हैं।
-2. **Automatic Scene Detection (ऑटोमैटिक सीन बदलना):**
-   - सर्वर हर सेकंड आपकी आने वाली स्क्रीन की जांच करता है।
-   - अगर पूरी स्क्रीन पर वह रंग आ जाता है जो आपने किसी **Color-Detect Scene** (जैसे `Pause Scene`) में सेट किया है, तो सर्वर तुरंत दोनों लाइव (`16:9` और `9:16`) को उस सीन पर स्विच कर देता है।
-   - जैसे ही स्क्रीन से वह रंग हटता है, सर्वर वापस **Default Scene** पर आ जाता है।
-   - अगर आपके PC का इंटरनेट या OBS बंद हो जाता है, तो YouTube लाइव बंद नहीं होती — सर्वर तुरंत **Network Error Scene** चला देता है और OBS वापस जुड़ते ही **Default Scene** पर आ जाता है।
-3. **Dual Output (16:9 + 9:16 एक साथ लाइव):**
-   - प्रत्येक सीन के सभी सोर्स `16:9` कैनवास और `9:16` कैनवास के अलग-अलग कोऑर्डिनेट्स के अनुसार रेंडर होते हैं और दोनों अलग-अलग स्ट्रीम कीज़ पर एक साथ लाइव चलते रहते हैं।
+### Step-by-Step Workflow:
+
+1. **Input (Sending Feed from Local OBS):**
+   - Open OBS Studio on your local PC. Add your game/window capture and microphone.
+   - Go to `Settings -> Stream -> Service: Custom`.
+   - Paste the **OBS Server URL** and **Stream Key** (`live_sleto`) shown on your cloud dashboard, then click **Start Streaming**.
+
+2. **Automated Scene Switching:**
+   - The cloud engine continuously samples the incoming stream.
+   - If the screen color matches a configured HEX value (e.g., a menu or pause screen), both streams shift to your designated **Color-Detect Scene**.
+   - When normal gameplay resumes, the stream seamlessly reverts to the **Default Scene**.
+   - If your home connection drops, the **Network Error Scene** activates immediately, ensuring your YouTube stream does not terminate.
+
+3. **Dual Live Broadcast Output:**
+   - All sources are rendered independently onto `16:9` and `9:16` target frames and streamed to their respective endpoints concurrently.
 
 ---
 
-## 🤝 4. Built Together by SletoYT & AI
+## 🤝 4. Credits & Collaboration
 
-इस प्रोजेक्ट (**`free-live-24-7-by-sletoyt`**) को **SletoYT** और **AI** ने मिलकर (in collaboration) डिज़ाइन और तैयार किया है।
-इसका मुख्य विज़न, फीचर्स की प्लानिंग (जैसे ऑटो कलर-डिटेक्ट सीन स्विचिंग, नेटवर्क एरर सीन, और एक साथ `16:9` + `9:16` डुअल लाइव सिस्टम) **SletoYT** के आइडियाज़ पर आधारित हैं, जिसे हमने मिलकर एक सुपर-लाइटवेट और आसान क्लाउड स्ट्रीमिंग टूल का रूप दिया है।
+This project (**`free-live-24-7-by-sletoyt`**) was envisioned, designed, and developed collaboratively by **SletoYT** and **AI**.
+
+The core ideas—including automatic color-detect scene transitions, automatic network error fail-safes, and simultaneous dual 16:9 + 9:16 cloud streaming—were conceptualized by **SletoYT** to create a lightweight, robust, 24/7 cloud streaming solution.
