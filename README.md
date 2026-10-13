@@ -30,9 +30,6 @@
 
 You can deploy and run this tool within minutes on any **Ubuntu / Debian VPS** or directly inside **GitHub Codespaces**.
 
-```
-  [ Local PC / OBS ] ──(RTMP Stream)──► [ Cloud VPS / Codespaces ] ──► [ YouTube Live 16:9 + 9:16 ]
-```
 
 ---
 
