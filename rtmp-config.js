@@ -24,10 +24,6 @@ function initializeRtmpServer(customConfig = {}) {
       port: httpPort,
       allow_origin: '*',
       mediaroot: mediaRoot
-    },
-    trans: {
-      ffmpeg: 'ffmpeg',
-      tasks: []
     }
   };
 

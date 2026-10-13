@@ -31,15 +31,27 @@ const io = new Server(server, {
 });
 
 const PORT = parseInt(process.env.PORT, 10) || 3000;
-const DATA_DIR = path.join(__dirname, 'data');
-const ASSETS_DIR = path.join(__dirname, 'assets');
-const MEDIA_DIR = path.join(__dirname, 'media');
-const UPLOADS_DIR = path.join(__dirname, 'uploads');
-const INSTANCES_FILE = path.join(DATA_DIR, 'instances.json');
+function ensureWritableDir(dirPath, fallbackName) {
+  try {
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true, mode: 0o777 });
+    }
+    fs.accessSync(dirPath, fs.constants.W_OK);
+    return dirPath;
+  } catch (_) {
+    const fallbackDir = path.join(os.tmpdir(), 'sletoyt_' + fallbackName);
+    if (!fs.existsSync(fallbackDir)) {
+      fs.mkdirSync(fallbackDir, { recursive: true, mode: 0o777 });
+    }
+    return fallbackDir;
+  }
+}
 
-[DATA_DIR, ASSETS_DIR, MEDIA_DIR, UPLOADS_DIR].forEach((dir) => {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-});
+const DATA_DIR = ensureWritableDir(path.join(__dirname, 'data'), 'data');
+const ASSETS_DIR = ensureWritableDir(path.join(__dirname, 'assets'), 'assets');
+const MEDIA_DIR = ensureWritableDir(path.join(__dirname, 'media'), 'media');
+const UPLOADS_DIR = ensureWritableDir(path.join(__dirname, 'uploads'), 'uploads');
+const INSTANCES_FILE = path.join(DATA_DIR, 'instances.json');
 
 const FALLBACK_16_9 = path.join(ASSETS_DIR, 'fallback_16_9.mp4');
 const FALLBACK_9_16 = path.join(ASSETS_DIR, 'fallback_9_16.mp4');
@@ -1296,9 +1308,16 @@ server.listen(PORT, '0.0.0.0', () => {
   addLog('INFO', `RTMP Ingest Server listening on port ${rtmpPort}`, 'BOOT');
   addLog('INFO', `HTTP-FLV Preview Server on port ${httpPort}`, 'BOOT');
 
+  const codespaceName = process.env.CODESPACE_NAME;
+  const forwardingDomain = process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN || 'app.github.dev';
+  const codespaceUrl = codespaceName ? `https://${codespaceName}-${PORT}.${forwardingDomain}` : null;
+
   origLog('================================================================');
   origLog('  ☁️ FREE-LIVE-24-7-BY-SLETOYT SKY CLOUD SERVER READY 🌸');
-  origLog(`  Web UI:             http://0.0.0.0:${PORT}`);
+  origLog(`  Local Web UI:       http://localhost:${PORT}`);
+  if (codespaceUrl) {
+    origLog(`  Codespaces Web UI:  ${codespaceUrl}`);
+  }
   origLog(`  RTMP Ingest Port:   ${rtmpPort} (rtmp://<vps-ip>:${rtmpPort}/live)`);
   origLog(`  HTTP-FLV Port:      ${httpPort}`);
   origLog('================================================================');
