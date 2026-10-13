@@ -1,2000 +1,1914 @@
-/**
- * Cute Sky Dual-Ratio Cloud Playout & Auto Color-Detect Web-OBS Client
- * Project: free-live-24-7-by-sletoyt
- * Features:
- *  - Side-by-Side Simultaneous 16:9 & 9:16 Live Scene Editor
- *  - Shared Scene Sources with Independent 16:9 (rect169) & 9:16 (rect916) Placement
- *  - 3 Scene Types: Default (Max 1), Color-Detect (Full-Screen Auto Trigger), Network-Error (Auto Fallback)
- *  - Real-Time Full-Screen Color Detector (Auto switches scene on color match & reverts to Default)
- *  - Simultaneous Dual Live Streaming (16:9 Stream Key + 9:16 Shorts Stream Key)
- *  - Cloud File System (Upload, Download, Preview & Pick BG Music, Logos, Videos)
- */
+const socket = io();
 
-(function () {
-  'use strict';
+let instances = [];
+let cloudFiles = [];
+let logsList = [];
+let currentFileCategory = 'all';
+let currentLogLevel = 'all';
+let activeTab = 'instances';
 
-  const socket = io();
+let tunnelInfo = {
+  active: false,
+  status: 'connecting',
+  publicRtmpUrl: null
+};
 
-  // ---------------------------------------------------------------------------
-  // 1. State Management
-  // ---------------------------------------------------------------------------
-  let instancesData = [];
-  let cloudFilesList = [];
-  let currentFileCategory = 'all';
-  let fileSearchQuery = '';
+let studioInstanceId = null;
+let selectedSceneId = null;
+let selectedSourceId = null;
 
-  // Active Studio State
-  let activeInstanceId = null;
-  let studioScenes = [];
-  let activeSceneId = null;
-  let selectedSourceId = null;
-  let autoSceneSwitch = true;
-  let saveDebounceTimer = null;
+let isBrowserDualLive = false;
+let recorder169 = null;
+let recorder916 = null;
 
-  // Incoming Live Window + Voiceover Feed (OBS RTMP FLV or Browser DisplayMedia)
-  let incomingFlvPlayer = null;
-  const incomingVideoEl = document.createElement('video');
-  incomingVideoEl.autoplay = true;
-  incomingVideoEl.muted = false;
-  incomingVideoEl.playsInline = true;
-  incomingVideoEl.crossOrigin = 'anonymous';
-  let browserDisplayStream = null;
-  let hasIncomingSignal = false;
+const mediaCache = new Map();
+let localCaptureVideoEl = null;
+let localCaptureStream = null;
+let flvPlayer = null;
+let flvVideoEl = null;
 
-  // Media Element Cache for Sources (id -> HTMLImageElement | HTMLVideoElement | HTMLAudioElement)
-  const mediaElementsMap = new Map();
+let audioCtx = null;
+let audioDest = null;
+const connectedAudioNodes = new WeakSet();
 
-  // Dual Canvas Dragging State
-  let activeDragCanvas = null; // '16:9' | '9:16'
-  let isDragging = false;
-  let isResizing = false;
-  let dragStartPos = { x: 0, y: 0 };
-  let initialRect = null;
+const canvas169 = document.getElementById('canvas169');
+const ctx169 = canvas169.getContext('2d');
+const canvas916 = document.getElementById('canvas916');
+const ctx916 = canvas916.getContext('2d');
 
-  // Dual Broadcast MediaRecorders & Web Audio Mixer
-  let isDualLive = false;
-  let recorder169 = null;
-  let recorder916 = null;
-  let audioCtx = null;
-  let audioDestNode = null;
-  let micStream = null;
-  let isMicEnabled = false;
-  let micGainNode = null;
-  let incomingAudioGain = null;
-  const connectedMediaNodes = new WeakMap();
+const samplerCanvas = document.createElement('canvas');
+samplerCanvas.width = 12;
+samplerCanvas.height = 12;
+const samplerCtx = samplerCanvas.getContext('2d', { willReadFrequently: true });
 
-  // Offscreen 16x16 Canvas for Client-Side Full-Screen Color Detection
-  const colorSampleCanvas = document.createElement('canvas');
-  colorSampleCanvas.width = 16;
-  colorSampleCanvas.height = 16;
-  const colorSampleCtx = colorSampleCanvas.getContext('2d', { willReadFrequently: true });
-  let noColorMatchCount = 0;
-
-  // Logs State
-  let logsList = [];
-  let autoScrollLogs = true;
-  let currentLogLevel = 'ALL';
-  let logSearchQuery = '';
-
-  // DOM Elements
-  const vpsIpDisplay = document.getElementById('vpsIpDisplay');
-  const activeStreamsCounter = document.getElementById('activeStreamsCounter');
-  const filesCounterBadge = document.getElementById('filesCounterBadge');
-  const instancesGrid = document.getElementById('instancesGrid');
-
-  // Studio DOM Elements
-  const studioModal = document.getElementById('studioModal');
-  const studioInstanceName = document.getElementById('studioInstanceName');
-  const chkAutoSceneSwitch = document.getElementById('chkAutoSceneSwitch');
-  const detectedColorSwatch = document.getElementById('detectedColorSwatch');
-  const detectedColorCode = document.getElementById('detectedColorCode');
-  const studioObsSignalPill = document.getElementById('studioObsSignalPill');
-  const saveStatusTag = document.getElementById('saveStatusTag');
-  const studioScenesList = document.getElementById('studioScenesList');
-  const activeSceneConfigBox = document.getElementById('activeSceneConfigBox');
-  const studioSourcesList = document.getElementById('studioSourcesList');
-  const studioPropertiesForm = document.getElementById('studioPropertiesForm');
-  const bottomActiveSceneName = document.getElementById('bottomActiveSceneName');
-
-  const canvas169 = document.getElementById('canvas169');
-  const canvas916 = document.getElementById('canvas916');
-  const viewport169 = document.getElementById('viewport169');
-  const viewport916 = document.getElementById('viewport916');
-  const ctx169 = canvas169.getContext('2d');
-  const ctx916 = canvas916.getContext('2d');
-
-  const studioGoLiveBtn = document.getElementById('studioGoLiveBtn');
-  const studioGoLiveText = document.getElementById('studioGoLiveText');
-  const studioMicToggle = document.getElementById('studioMicToggle');
-
-  const currentHost = window.location.hostname || '127.0.0.1';
-  if (vpsIpDisplay) vpsIpDisplay.textContent = currentHost;
-
-  // ---------------------------------------------------------------------------
-  // 2. Navigation Tabs & Mobile Studio Switcher
-  // ---------------------------------------------------------------------------
-  function switchMainTab(tabId) {
-    document.querySelectorAll('.tab-pane').forEach((p) => p.classList.remove('active'));
-    document.querySelectorAll('.nav-tab').forEach((t) => t.classList.remove('active'));
-    document.querySelectorAll('.mobile-tab-btn').forEach((b) => b.classList.remove('active'));
-
-    const pane = document.getElementById(tabId);
-    if (pane) pane.classList.add('active');
-
-    const nav = document.querySelector(`.nav-tab[data-tab="${tabId}"]`);
-    if (nav) nav.classList.add('active');
-
-    const mob = document.querySelector(`.mobile-tab-btn[data-tab="${tabId}"]`);
-    if (mob) mob.classList.add('active');
-
-    if (tabId === 'tab-files') fetchCloudFiles();
-    if (tabId === 'tab-system') fetchSystemStatus();
-  }
-
-  document.querySelectorAll('.nav-tab, .mobile-tab-btn').forEach((btn) => {
-    btn.addEventListener('click', () => switchMainTab(btn.getAttribute('data-tab')));
-  });
-
-  document.querySelectorAll('.studio-mob-tab').forEach((btn) => {
+function initTheme() {
+  const saved = localStorage.getItem('sleto_sky_theme') || 'dark';
+  applyTheme(saved);
+  const btn = document.getElementById('themeToggleBtn');
+  if (btn) {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.studio-mob-tab').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
-      const panel = btn.getAttribute('data-panel');
-      const workArea = document.getElementById('studioWorkArea');
-      workArea.className = 'studio-work-area';
-      if (panel === 'panel-scenes') workArea.classList.add('mob-scenes');
-      if (panel === 'panel-props') workArea.classList.add('mob-props');
-      setTimeout(fitDualCanvases, 30);
+      const current = document.documentElement.getAttribute('data-theme') || 'dark';
+      const next = current === 'dark' ? 'light' : 'dark';
+      applyTheme(next);
+      localStorage.setItem('sleto_sky_theme', next);
     });
-  });
+  }
+}
 
-  // ---------------------------------------------------------------------------
-  // 3. Dual Side-by-Side Canvas Auto-Fit Engine (16:9 + 9:16 Together!)
-  // ---------------------------------------------------------------------------
-  function fitSingleCanvas(viewport, canvas, targetRatio) {
-    if (!viewport || !canvas) return;
-    const pad = 16;
-    const availW = Math.max(80, viewport.clientWidth - pad);
-    const availH = Math.max(80, viewport.clientHeight - pad);
-
-    let dispW, dispH;
-    if (availW / availH > targetRatio) {
-      dispH = availH;
-      dispW = Math.round(dispH * targetRatio);
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const icon = document.getElementById('themeToggleIcon');
+  const label = document.getElementById('themeToggleLabel');
+  if (icon && label) {
+    if (theme === 'dark') {
+      icon.textContent = '☀️';
+      label.textContent = 'Light Sky';
     } else {
-      dispW = availW;
-      dispH = Math.round(dispW / targetRatio);
+      icon.textContent = '🌙';
+      label.textContent = 'Dark Sky';
     }
-
-    canvas.style.width = `${dispW}px`;
-    canvas.style.height = `${dispH}px`;
   }
+}
 
-  function fitDualCanvases() {
-    fitSingleCanvas(viewport169, canvas169, 16 / 9);
-    fitSingleCanvas(viewport916, canvas916, 9 / 16);
+initTheme();
+
+function showToast(message, type = 'info') {
+  const container = document.getElementById('toastContainer');
+  if (!container) return;
+  const el = document.createElement('div');
+  el.className = 'toast';
+  if (type === 'error') el.style.borderLeftColor = '#f43f5e';
+  if (type === 'success') el.style.borderLeftColor = '#10b981';
+  if (type === 'scene') el.style.borderLeftColor = '#f472b6';
+  el.textContent = message;
+  container.appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+function formatBytes(bytes) {
+  if (!bytes || bytes < 1024) return `${bytes || 0} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function escapeHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function isCodespacesHost() {
+  const h = window.location.hostname || '';
+  return h.endsWith('.app.github.dev') || h.endsWith('.github.dev');
+}
+
+function getRecommendedObsServerUrl() {
+  if (tunnelInfo && tunnelInfo.publicRtmpUrl) {
+    return tunnelInfo.publicRtmpUrl;
   }
-
-  window.addEventListener('resize', fitDualCanvases);
-  if (typeof ResizeObserver !== 'undefined') {
-    const ro = new ResizeObserver(() => fitDualCanvases());
-    if (viewport169) ro.observe(viewport169);
-    if (viewport916) ro.observe(viewport916);
+  if (isCodespacesHost()) {
+    return 'Connecting Tunnel... (Click Refresh Tunnel)';
   }
+  const host = window.location.hostname || 'localhost';
+  return `rtmp://${host}:1935/live`;
+}
 
-  // ---------------------------------------------------------------------------
-  // 4. Cloud File System (Upload, Download, Rename, Delete, Studio Picker)
-  // ---------------------------------------------------------------------------
-  const globalFileInput = document.getElementById('globalFileInput');
-  const uploadDropzone = document.getElementById('uploadDropzone');
-  const uploadProgressWrap = document.getElementById('uploadProgressWrap');
-  const uploadProgressBar = document.getElementById('uploadProgressBar');
-  const uploadProgressText = document.getElementById('uploadProgressText');
-  const filesGrid = document.getElementById('filesGrid');
+function updateTunnelUiBanner() {
+  const serverUrl = getRecommendedObsServerUrl();
+  const globalCode = document.getElementById('globalObsServerUrl');
+  const guideCode = document.getElementById('guideObsServerUrl');
+  const hint = document.getElementById('tunnelStatusHint');
 
-  async function fetchCloudFiles() {
-    try {
-      const res = await fetch('/api/files');
-      const data = await res.json();
-      cloudFilesList = data.files || [];
-      if (filesCounterBadge) filesCounterBadge.textContent = cloudFilesList.length;
-      renderCloudFilesGrid();
-      renderPickerFilesList();
-    } catch (_) {}
+  if (globalCode) globalCode.textContent = serverUrl;
+  if (guideCode) guideCode.textContent = serverUrl;
+
+  if (hint) {
+    if (tunnelInfo && tunnelInfo.publicRtmpUrl) {
+      hint.textContent = '✅ Public TCP Tunnel Active — Paste this exact Server URL in OBS Studio (works on Codespaces & VPS).';
+    } else if (isCodespacesHost()) {
+      hint.textContent = '⏳ Starting built-in SSH TCP Tunnel for GitHub Codespaces...';
+    } else {
+      hint.textContent = '✅ Direct VPS Port 1935 Ready — Paste this Server URL in OBS Studio.';
+    }
   }
+}
 
-  socket.on('files-update', (files) => {
-    cloudFilesList = files || [];
-    if (filesCounterBadge) filesCounterBadge.textContent = cloudFilesList.length;
-    renderCloudFilesGrid();
-    renderPickerFilesList();
+function copyTextToClipboard(text, label = 'Copied') {
+  if (!text || text.startsWith('Connecting')) {
+    showToast('Wait 2 seconds for tunnel URL or click Refresh Tunnel', 'error');
+    return;
+  }
+  navigator.clipboard.writeText(text).then(() => {
+    showToast(`📋 ${label}: ${text}`, 'success');
+  }).catch(() => {
+    showToast('Failed to copy text', 'error');
   });
+}
 
-  async function uploadFilesToServer(fileList) {
-    if (!fileList || fileList.length === 0) return null;
+document.getElementById('copyGlobalObsUrlBtn')?.addEventListener('click', () => {
+  copyTextToClipboard(getRecommendedObsServerUrl(), 'OBS Server URL Copied');
+});
+
+document.getElementById('guideCopyServerBtn')?.addEventListener('click', () => {
+  copyTextToClipboard(getRecommendedObsServerUrl(), 'OBS Server URL Copied');
+});
+
+document.getElementById('refreshTunnelBtn')?.addEventListener('click', async () => {
+  showToast('🔄 Restarting Public RTMP TCP Tunnel...', 'info');
+  try {
+    await fetch('/api/tunnel/restart', { method: 'POST' });
+  } catch (_) {}
+});
+
+document.querySelectorAll('.nav-tab').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const target = btn.dataset.tab;
+    switchMainTab(target);
+  });
+});
+
+function switchMainTab(tabName) {
+  activeTab = tabName;
+  document.querySelectorAll('.nav-tab').forEach((b) => {
+    const active = b.dataset.tab === tabName;
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-selected', String(active));
+  });
+  document.querySelectorAll('.tab-panel').forEach((p) => {
+    p.classList.toggle('active', p.id === `tab-${tabName}`);
+  });
+  if (tabName === 'system') fetchSystemHealth();
+  if (tabName === 'studio') syncStudioUI();
+}
+
+socket.on('connect', () => {
+  document.getElementById('socketDot')?.classList.add('online');
+  const txt = document.getElementById('socketText');
+  if (txt) txt.textContent = 'Connected';
+});
+
+socket.on('disconnect', () => {
+  document.getElementById('socketDot')?.classList.remove('online');
+  const txt = document.getElementById('socketText');
+  if (txt) txt.textContent = 'Reconnecting...';
+});
+
+socket.on('tunnel-update', (state) => {
+  if (state) {
+    tunnelInfo = state;
+    updateTunnelUiBanner();
+    renderInstancesGrid();
+  }
+});
+
+socket.on('instances-update', (data) => {
+  instances = Array.isArray(data) ? data : [];
+  document.getElementById('navInstancesCount').textContent = instances.length;
+  document.getElementById('statTotalChannels').textContent = instances.length;
+  document.getElementById('statActiveStreams').textContent = instances.filter((i) => i.status === 'live').length;
+
+  if (!studioInstanceId && instances.length > 0) {
+    studioInstanceId = instances[0].id;
+  } else if (studioInstanceId && !instances.some((i) => i.id === studioInstanceId)) {
+    studioInstanceId = instances[0]?.id || null;
+  }
+
+  renderInstancesGrid();
+  populateStudioChannelSelect();
+  syncStudioUI();
+});
+
+socket.on('files-update', (data) => {
+  cloudFiles = Array.isArray(data) ? data : [];
+  document.getElementById('navFilesCount').textContent = cloudFiles.length;
+  document.getElementById('statStoredFiles').textContent = cloudFiles.length;
+  renderCloudFilesGrid();
+  populateModalFileSelect();
+});
+
+socket.on('scene-switched', ({ instanceId, sceneName, reason }) => {
+  if (instanceId === studioInstanceId) {
+    showToast(`🎬 Scene -> "${sceneName}" (${reason})`, 'scene');
+    syncStudioUI();
+  }
+});
+
+socket.on('color-telemetry', ({ instanceId, detectedHex, uniformity }) => {
+  if (instanceId === studioInstanceId && detectedHex) {
+    const swatch = document.getElementById('studioDetectedSwatch');
+    const txt = document.getElementById('studioDetectedHexText');
+    if (swatch) swatch.style.background = detectedHex;
+    if (txt) txt.textContent = `Screen: ${detectedHex} (${uniformity}%)`;
+  }
+});
+
+socket.on('logs:history', (history) => {
+  logsList = Array.isArray(history) ? history : [];
+  renderLogsTerminal();
+});
+
+socket.on('log:entry', (entry) => {
+  logsList.push(entry);
+  if (logsList.length > 200) logsList.shift();
+  if (activeTab === 'logs') {
+    appendSingleLogLine(entry);
+  }
+});
+
+socket.on('logs:cleared', () => {
+  logsList = [];
+  renderLogsTerminal();
+});
+
+function renderInstancesGrid() {
+  const grid = document.getElementById('instancesGrid');
+  if (!grid) return;
+
+  if (instances.length === 0) {
+    grid.innerHTML = `
+      <div class="instance-card">
+        <h3>🌸 No Dual Playout Channels Yet</h3>
+        <p style="color:var(--text-sub);font-size:0.86rem;">Click <strong>＋ New Live Channel</strong> to create your 16:9 + 9:16 simultaneous live channel.</p>
+      </div>
+    `;
+    return;
+  }
+
+  const rtmpServerUrl = getRecommendedObsServerUrl();
+
+  grid.innerHTML = instances
+    .map((inst) => {
+      const isLive = inst.status === 'live';
+      const activeScene = inst.scenes.find((s) => s.id === inst.activeSceneId) || inst.scenes[0];
+
+      return `
+        <div class="instance-card ${isLive ? 'is-live' : ''}">
+          <div class="inst-card-top">
+            <div class="inst-title-group">
+              <h3>${escapeHtml(inst.name)}</h3>
+              <div class="inst-badges">
+                <span class="badge ${isLive ? 'badge-live' : 'badge-offline'}">
+                  ${isLive ? '● ON AIR (16:9 + 9:16)' : '○ OFFLINE'}
+                </span>
+                <span class="badge badge-sky">
+                  ${inst.obsConnected ? '🟢 OBS Connected' : '📡 Waiting for OBS'}
+                </span>
+                <span class="badge badge-sakura">
+                  🤖 Auto Switch: ${inst.autoSceneSwitch ? 'ON' : 'OFF'}
+                </span>
+              </div>
+            </div>
+            <button class="btn-icon" onclick="openEditInstanceModal('${inst.id}')" title="Edit Stream Keys">⚙️</button>
+          </div>
+
+          <div class="inst-ingest-box">
+            <div class="ingest-row">
+              <span><strong>OBS Server:</strong> <code>${escapeHtml(rtmpServerUrl)}</code></span>
+              <button class="btn btn-tonal btn-xs" onclick="copyTextToClipboard('${escapeHtml(rtmpServerUrl)}', 'OBS Server Copied')">Copy</button>
+            </div>
+            <div class="ingest-row">
+              <span><strong>OBS Stream Key:</strong> <code>${escapeHtml(inst.rtmpIngestKey)}</code></span>
+              <button class="btn btn-tonal btn-xs" onclick="copyTextToClipboard('${escapeHtml(inst.rtmpIngestKey)}', 'Stream Key Copied')">Copy</button>
+            </div>
+            <div class="ingest-row">
+              <span><strong>Outputs:</strong> 16:9 ${inst.streamKey169 ? '✅' : '⚠️ No Key'} | 9:16 ${inst.streamKey916 ? '✅' : '⚠️ No Key'}</span>
+              <span>${inst.fps || 30} FPS</span>
+            </div>
+          </div>
+
+          <div>
+            <span style="font-size:0.74rem;font-weight:700;color:var(--text-muted);display:block;margin-bottom:5px;">
+              🎬 Quick Scene Switch (Syncs 16:9 &amp; 9:16):
+            </span>
+            <div class="inst-scenes-strip">
+              ${inst.scenes
+                .map(
+                  (sc) => `
+                  <button class="scene-chip ${sc.id === activeScene?.id ? 'active' : ''}"
+                          onclick="quickSwitchScene('${inst.id}', '${sc.id}')">
+                    ${sc.type === 'default' ? '🟢' : sc.type === 'color-detect' ? '🎨' : '📡'}
+                    ${escapeHtml(sc.name)}
+                  </button>
+                `
+                )
+                .join('')}
+            </div>
+          </div>
+
+          <div class="inst-card-actions">
+            <button class="btn btn-primary btn-sm" onclick="openInstanceInStudio('${inst.id}')">
+              🎬 Open Dual Studio
+            </button>
+            ${
+              isLive
+                ? `<button class="btn btn-danger btn-sm" onclick="stopChannelPlayout('${inst.id}')">⏹ Stop Live</button>`
+                : `<button class="btn btn-sakura btn-sm" onclick="startBackendPlayout('${inst.id}')">▶ Start Dual Playout</button>`
+            }
+            <button class="btn btn-ghost btn-sm" onclick="openEditInstanceModal('${inst.id}')">
+              🔑 Keys
+            </button>
+            <button class="btn btn-ghost btn-xs" style="margin-left:auto;color:var(--danger);" onclick="deleteInstance('${inst.id}')">
+              🗑
+            </button>
+          </div>
+        </div>
+      `;
+    })
+    .join('');
+}
+
+window.openInstanceInStudio = function (id) {
+  studioInstanceId = id;
+  const inst = getStudioInstance();
+  if (inst) {
+    selectedSceneId = inst.activeSceneId || inst.scenes[0]?.id;
+    selectedSourceId = null;
+  }
+  switchMainTab('studio');
+};
+
+window.quickSwitchScene = async function (instanceId, sceneId) {
+  try {
+    await fetch(`/api/instances/${instanceId}/scene-switch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sceneId, reason: 'Manual Quick Switch' })
+    });
+  } catch (_) {
+    showToast('Failed to switch scene', 'error');
+  }
+};
+
+window.startBackendPlayout = async function (instanceId) {
+  try {
+    const res = await fetch(`/api/instances/${instanceId}/start`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to start playout');
+    showToast(`🚀 ${data.message}`, 'success');
+  } catch (err) {
+    showToast(err.message, 'error');
+    openEditInstanceModal(instanceId);
+  }
+};
+
+window.stopChannelPlayout = async function (instanceId) {
+  if (isBrowserDualLive && studioInstanceId === instanceId) {
+    stopBrowserDualStreaming();
+  }
+  try {
+    await fetch(`/api/instances/${instanceId}/stop`, { method: 'POST' });
+    showToast('⏹ Stopped Dual Broadcast', 'info');
+  } catch (_) {
+    showToast('Failed to stop broadcast', 'error');
+  }
+};
+
+window.deleteInstance = async function (instanceId) {
+  if (!confirm('Delete this Dual Playout channel?')) return;
+  await fetch(`/api/instances/${instanceId}`, { method: 'DELETE' });
+  showToast('Channel deleted', 'info');
+};
+
+const instanceModal = document.getElementById('instanceModal');
+const instanceForm = document.getElementById('instanceForm');
+
+document.getElementById('openNewInstanceModalBtn')?.addEventListener('click', () => {
+  document.getElementById('instanceModalTitle').textContent = '🌸 New Dual Playout Channel (16:9 + 9:16)';
+  document.getElementById('instIdInput').value = '';
+  document.getElementById('instNameInput').value = '';
+  document.getElementById('instIngestKeyInput').value = 'live_' + Math.random().toString(36).substr(2, 5);
+  document.getElementById('instRtmp169Input').value = 'rtmp://a.rtmp.youtube.com/live2';
+  document.getElementById('instKey169Input').value = '';
+  document.getElementById('instEnable169Check').checked = true;
+  document.getElementById('instRtmp916Input').value = 'rtmp://a.rtmp.youtube.com/live2';
+  document.getElementById('instKey916Input').value = '';
+  document.getElementById('instEnable916Check').checked = true;
+  document.getElementById('instFpsSelect').value = '30';
+  document.getElementById('instBitrateInput').value = '2500';
+  instanceModal.classList.remove('hidden');
+});
+
+window.openEditInstanceModal = function (id) {
+  const inst = instances.find((i) => i.id === id);
+  if (!inst) return;
+  document.getElementById('instanceModalTitle').textContent = `⚙️ Configure: ${inst.name}`;
+  document.getElementById('instIdInput').value = inst.id;
+  document.getElementById('instNameInput').value = inst.name;
+  document.getElementById('instIngestKeyInput').value = inst.rtmpIngestKey || 'live_sleto';
+  document.getElementById('instRtmp169Input').value = inst.rtmpUrl169 || 'rtmp://a.rtmp.youtube.com/live2';
+  document.getElementById('instKey169Input').value = inst.streamKey169 || '';
+  document.getElementById('instEnable169Check').checked = inst.enable169 !== false;
+  document.getElementById('instRtmp916Input').value = inst.rtmpUrl916 || 'rtmp://a.rtmp.youtube.com/live2';
+  document.getElementById('instKey916Input').value = inst.streamKey916 || '';
+  document.getElementById('instEnable916Check').checked = inst.enable916 !== false;
+  document.getElementById('instFpsSelect').value = String(inst.fps || 30);
+  document.getElementById('instBitrateInput').value = String(inst.bitrate || 2500);
+  instanceModal.classList.remove('hidden');
+};
+
+document.getElementById('closeInstanceModalBtn')?.addEventListener('click', () => instanceModal.classList.add('hidden'));
+document.getElementById('cancelInstanceModalBtn')?.addEventListener('click', () => instanceModal.classList.add('hidden'));
+
+instanceForm?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const id = document.getElementById('instIdInput').value;
+  const payload = {
+    name: document.getElementById('instNameInput').value.trim(),
+    rtmpIngestKey: document.getElementById('instIngestKeyInput').value.trim(),
+    rtmpUrl169: document.getElementById('instRtmp169Input').value.trim(),
+    streamKey169: document.getElementById('instKey169Input').value.trim(),
+    enable169: document.getElementById('instEnable169Check').checked,
+    rtmpUrl916: document.getElementById('instRtmp916Input').value.trim(),
+    streamKey916: document.getElementById('instKey916Input').value.trim(),
+    enable916: document.getElementById('instEnable916Check').checked,
+    fps: Number(document.getElementById('instFpsSelect').value),
+    bitrate: Number(document.getElementById('instBitrateInput').value)
+  };
+
+  try {
+    const url = id ? `/api/instances/${id}` : '/api/instances';
+    const method = id ? 'PUT' : 'POST';
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const saved = await res.json();
+    if (!id && saved.id) studioInstanceId = saved.id;
+    instanceModal.classList.add('hidden');
+    showToast('💾 Channel configuration saved!', 'success');
+  } catch (_) {
+    showToast('Failed to save channel', 'error');
+  }
+});
+
+const cloudFileInput = document.getElementById('cloudFileInput');
+const triggerCloudUploadBtn = document.getElementById('triggerCloudUploadBtn');
+
+triggerCloudUploadBtn?.addEventListener('click', () => cloudFileInput?.click());
+document.getElementById('quickUploadInModalBtn')?.addEventListener('click', () => cloudFileInput?.click());
+
+cloudFileInput?.addEventListener('change', async (e) => {
+  const files = Array.from(e.target.files || []);
+  if (files.length === 0) return;
+
+  const progressText = document.getElementById('uploadProgressText');
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    if (progressText) progressText.textContent = `☁️ Uploading (${i + 1}/${files.length}): ${file.name}...`;
     const formData = new FormData();
-    Array.from(fileList).forEach((f) => formData.append('files', f));
-
-    if (uploadProgressWrap) {
-      uploadProgressWrap.style.display = 'block';
-      uploadProgressBar.style.width = '35%';
-      uploadProgressText.textContent = `Uploading ${fileList.length} file(s)...`;
-    }
-
+    formData.append('file', file);
     try {
       const res = await fetch('/api/files/upload', {
         method: 'POST',
         body: formData
       });
       const data = await res.json();
-      if (uploadProgressBar) uploadProgressBar.style.width = '100%';
-      setTimeout(() => {
-        if (uploadProgressWrap) uploadProgressWrap.style.display = 'none';
-      }, 800);
-      await fetchCloudFiles();
-      return data;
+      if (!res.ok) throw new Error(data.error || 'Upload error');
+      showToast(`✅ Uploaded: ${file.name}`, 'success');
     } catch (err) {
-      if (uploadProgressWrap) uploadProgressWrap.style.display = 'none';
-      alert('File upload failed: ' + err.message);
-      return null;
+      showToast(`Upload failed (${file.name}): ${err.message}`, 'error');
     }
   }
+  if (progressText) progressText.textContent = '';
+  cloudFileInput.value = '';
+});
 
-  document.getElementById('btnTriggerFileUpload').addEventListener('click', () => globalFileInput.click());
-  uploadDropzone.addEventListener('click', () => globalFileInput.click());
-
-  globalFileInput.addEventListener('change', async (e) => {
-    if (e.target.files.length > 0) {
-      await uploadFilesToServer(e.target.files);
-      globalFileInput.value = '';
-    }
-  });
-
-  uploadDropzone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    uploadDropzone.classList.add('dragover');
-  });
-  uploadDropzone.addEventListener('dragleave', () => uploadDropzone.classList.remove('dragover'));
-  uploadDropzone.addEventListener('drop', async (e) => {
-    e.preventDefault();
-    uploadDropzone.classList.remove('dragover');
-    if (e.dataTransfer.files.length > 0) {
-      await uploadFilesToServer(e.dataTransfer.files);
-    }
-  });
-
-  document.querySelectorAll('.pill-filter').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.pill-filter').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
-      currentFileCategory = btn.getAttribute('data-cat');
-      renderCloudFilesGrid();
-    });
-  });
-
-  document.getElementById('fileSearchInput').addEventListener('input', (e) => {
-    fileSearchQuery = e.target.value.trim().toLowerCase();
+document.querySelectorAll('.filter-pill').forEach((pill) => {
+  pill.addEventListener('click', () => {
+    document.querySelectorAll('.filter-pill').forEach((p) => p.classList.remove('active'));
+    pill.classList.add('active');
+    currentFileCategory = pill.dataset.fileCat;
     renderCloudFilesGrid();
   });
+});
 
-  function formatBytes(bytes) {
-    if (!bytes) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+function renderCloudFilesGrid() {
+  const grid = document.getElementById('cloudFilesGrid');
+  if (!grid) return;
+
+  const filtered =
+    currentFileCategory === 'all'
+      ? cloudFiles
+      : cloudFiles.filter((f) => f.category === currentFileCategory);
+
+  if (filtered.length === 0) {
+    grid.innerHTML = `
+      <div class="file-card">
+        <h4>☁️ Cloud Folder is Empty</h4>
+        <p style="font-size:0.8rem;color:var(--text-sub);">Upload your BG Music (<code>.mp3</code>), Logos (<code>.png</code>), or Standby Videos (<code>.mp4</code>) to use across all scenes.</p>
+      </div>
+    `;
+    return;
   }
 
-  function renderCloudFilesGrid() {
-    if (!filesGrid) return;
-    const filtered = cloudFilesList.filter((f) => {
-      if (currentFileCategory !== 'all' && f.category !== currentFileCategory) return false;
-      if (fileSearchQuery && !f.name.toLowerCase().includes(fileSearchQuery)) return false;
-      return true;
-    });
-
-    if (filtered.length === 0) {
-      filesGrid.innerHTML = `
-        <div style="grid-column: 1/-1; text-align:center; padding: 36px; background: rgba(255,255,255,0.75); border-radius: 18px; border: 2px dashed var(--sky-border);">
-          <h3>☁️ No Media Files Found</h3>
-          <p style="color: var(--text-slate); font-size: 13px; margin-top: 4px;">Upload your BG Music (.mp3), Logos (.png), or Video Loops (.mp4) above!</p>
-        </div>
-      `;
-      return;
-    }
-
-    filesGrid.innerHTML = '';
-    filtered.forEach((f) => {
-      const card = document.createElement('div');
-      card.className = 'file-card';
-
-      let previewHtml = `<div style="font-size:36px;">📄</div>`;
+  grid.innerHTML = filtered
+    .map((f) => {
+      let previewHtml = `<div style="font-size:2.4rem;">📄</div>`;
       if (f.category === 'image') {
-        previewHtml = `<img src="${f.url}" alt="${escapeHtml(f.name)}">`;
+        previewHtml = `<img src="${f.url}" alt="${escapeHtml(f.displayName)}" loading="lazy" />`;
       } else if (f.category === 'video') {
-        previewHtml = `<video src="${f.url}" muted loop controls preload="metadata"></video>`;
+        previewHtml = `<video src="${f.url}" muted loop playsinline onmouseover="this.play()" onmouseout="this.pause()"></video>`;
       } else if (f.category === 'audio') {
         previewHtml = `
-          <div style="display:flex;flex-direction:column;align-items:center;gap:8px;width:90%;">
-            <span style="font-size:28px;">🎵</span>
-            <audio src="${f.url}" controls style="width:100%;height:32px;"></audio>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:10px;width:100%;">
+            <span style="font-size:2rem;">🎵</span>
+            <audio src="${f.url}" controls style="width:95%;height:32px;"></audio>
           </div>
         `;
       }
 
-      card.innerHTML = `
-        <div class="file-preview-box">${previewHtml}</div>
-        <div class="file-meta-title" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
-        <div class="file-meta-sub">
-          <span>${f.category.toUpperCase()}</span>
-          <span>${formatBytes(f.size)}</span>
-        </div>
-        <div class="file-actions">
-          <a href="${f.downloadUrl}" download class="btn btn-xs btn-sky-soft" style="flex:1;">⬇ Download</a>
-          <button class="btn btn-xs btn-sky-soft" onclick="window.renameCloudFile('${escapeHtml(f.name)}')">✏️</button>
-          <button class="btn btn-xs btn-danger-soft" onclick="window.deleteCloudFile('${escapeHtml(f.name)}')">🗑</button>
+      return `
+        <div class="file-card">
+          <div class="file-preview-box">${previewHtml}</div>
+          <div class="file-meta">
+            <h4>${escapeHtml(f.displayName)}</h4>
+            <p>${f.category.toUpperCase()} • ${formatBytes(f.sizeBytes)}</p>
+          </div>
+          <div class="file-card-actions">
+            <button class="btn btn-primary btn-xs" onclick="useCloudFileInCurrentScene('${encodeURIComponent(f.id)}')">
+              ＋ Use in Scene
+            </button>
+            <a class="btn btn-tonal btn-xs" href="${f.downloadUrl}" download>
+              ⬇ Download
+            </a>
+            <button class="btn btn-ghost btn-xs" onclick="renameCloudFile('${encodeURIComponent(f.id)}', '${escapeHtml(f.displayName)}')">
+              ✏️
+            </button>
+            <button class="btn btn-ghost btn-xs" style="color:var(--danger);" onclick="deleteCloudFile('${encodeURIComponent(f.id)}')">
+              🗑
+            </button>
+          </div>
         </div>
       `;
-      filesGrid.appendChild(card);
-    });
+    })
+    .join('');
+}
+
+window.useCloudFileInCurrentScene = function (encodedId) {
+  const fileId = decodeURIComponent(encodedId);
+  const fileObj = cloudFiles.find((f) => f.id === fileId);
+  if (!fileObj) return;
+
+  const inst = getStudioInstance();
+  if (!inst) {
+    showToast('Create a channel first!', 'error');
+    return;
   }
 
-  window.renameCloudFile = async function (oldName) {
-    const newName = prompt('Enter new file name (keep extension):', oldName);
-    if (!newName || newName.trim() === oldName) return;
-    await fetch(`/api/files/${encodeURIComponent(oldName)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ newName: newName.trim() })
-    });
+  const scene = getSelectedScene(inst);
+  if (!scene) return;
+
+  let srcType = 'image';
+  if (fileObj.category === 'audio') srcType = 'audio';
+  if (fileObj.category === 'video') srcType = 'video';
+
+  const newSource = {
+    id: 'src_' + Date.now().toString(36),
+    name: fileObj.displayName,
+    type: srcType,
+    fileId: fileObj.id,
+    url: fileObj.url,
+    text: '',
+    color: '#38bdf8',
+    volume: 1.0,
+    muted: false,
+    loop: true,
+    visible: true,
+    rect169: srcType === 'video' ? { x: 0, y: 0, w: 1920, h: 1080 } : { x: 80, y: 80, w: 320, h: 320 },
+    rect916: srcType === 'video' ? { x: 0, y: 0, w: 1080, h: 1920 } : { x: 380, y: 120, w: 320, h: 320 }
   };
 
-  window.deleteCloudFile = async function (name) {
-    if (!confirm(`Delete "${name}" from Cloud File System?`)) return;
-    await fetch(`/api/files/${encodeURIComponent(name)}`, { method: 'DELETE' });
-  };
+  scene.sources.push(newSource);
+  selectedSourceId = newSource.id;
+  persistStudioInstance();
+  switchMainTab('studio');
+  showToast(`🌸 Added "${fileObj.displayName}" to 16:9 & 9:16 in "${scene.name}"!`, 'success');
+};
 
-  // Studio File Picker Modal
-  const filePickerModal = document.getElementById('filePickerModal');
-  const pickerFilesList = document.getElementById('pickerFilesList');
-  const pickerSearchInput = document.getElementById('pickerSearchInput');
+window.renameCloudFile = async function (encodedId, currentName) {
+  const fileId = decodeURIComponent(encodedId);
+  const newName = prompt('Enter new file name:', currentName);
+  if (!newName || !newName.trim()) return;
+  await fetch(`/api/files/${encodeURIComponent(fileId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ newName: newName.trim() })
+  });
+  showToast('✏️ File renamed!', 'success');
+};
 
-  function renderPickerFilesList() {
-    if (!pickerFilesList) return;
-    const q = (pickerSearchInput?.value || '').trim().toLowerCase();
-    const list = cloudFilesList.filter((f) => !q || f.name.toLowerCase().includes(q));
+window.deleteCloudFile = async function (encodedId) {
+  const fileId = decodeURIComponent(encodedId);
+  if (!confirm('Delete this file from Cloud File System?')) return;
+  await fetch(`/api/files/${encodeURIComponent(fileId)}`, { method: 'DELETE' });
+  showToast('🗑 File deleted', 'info');
+};
 
-    if (list.length === 0) {
-      pickerFilesList.innerHTML = `<p class="empty-panel-hint">No uploaded files yet. Click "☁️ + Upload New" above!</p>`;
-      return;
-    }
+function getStudioInstance() {
+  return instances.find((i) => i.id === studioInstanceId) || instances[0] || null;
+}
 
-    pickerFilesList.innerHTML = '';
-    list.forEach((f) => {
-      const icon = f.category === 'audio' ? '🎵 BG Music' : f.category === 'image' ? '🖼️ Logo/Image' : '🎬 Video';
-      const row = document.createElement('div');
-      row.className = 'picker-file-item';
-      row.innerHTML = `
-        <div>
-          <strong>${escapeHtml(f.name)}</strong>
-          <div style="font-size:11px;color:var(--text-muted);">${icon} • ${formatBytes(f.size)}</div>
-        </div>
-        <button class="btn btn-xs btn-sakura">➕ Add to Scene (16:9 & 9:16)</button>
-      `;
-      row.querySelector('button').addEventListener('click', () => {
-        addFileSourceToActiveScene(f);
-        filePickerModal.style.display = 'none';
-      });
-      pickerFilesList.appendChild(row);
-    });
+function getSelectedScene(inst) {
+  if (!inst || !Array.isArray(inst.scenes)) return null;
+  return (
+    inst.scenes.find((s) => s.id === selectedSceneId) ||
+    inst.scenes.find((s) => s.id === inst.activeSceneId) ||
+    inst.scenes[0] ||
+    null
+  );
+}
+
+function populateStudioChannelSelect() {
+  const sel = document.getElementById('studioInstanceSelect');
+  if (!sel) return;
+  sel.innerHTML = instances
+    .map((inst) => `<option value="${inst.id}" ${inst.id === studioInstanceId ? 'selected' : ''}>${escapeHtml(inst.name)}</option>`)
+    .join('');
+}
+
+document.getElementById('studioInstanceSelect')?.addEventListener('change', (e) => {
+  studioInstanceId = e.target.value;
+  const inst = getStudioInstance();
+  selectedSceneId = inst?.activeSceneId || inst?.scenes[0]?.id || null;
+  selectedSourceId = null;
+  syncStudioUI();
+});
+
+function syncStudioUI() {
+  const inst = getStudioInstance();
+  if (!inst) return;
+
+  if (!selectedSceneId || !inst.scenes.some((s) => s.id === selectedSceneId)) {
+    selectedSceneId = inst.activeSceneId || inst.scenes[0]?.id;
   }
 
-  if (pickerSearchInput) {
-    pickerSearchInput.addEventListener('input', renderPickerFilesList);
+  const obsPill = document.getElementById('studioObsSignalPill');
+  if (obsPill) {
+    const connected = inst.obsConnected || Boolean(localCaptureStream);
+    obsPill.textContent = connected ? '🟢 Signal Connected' : '📡 OBS Offline';
+    obsPill.classList.toggle('connected', connected);
   }
 
-  document.getElementById('btnAddFileSource').addEventListener('click', () => {
-    fetchCloudFiles();
-    filePickerModal.style.display = 'flex';
-  });
+  const autoToggle = document.getElementById('studioAutoSwitchToggle');
+  if (autoToggle) autoToggle.checked = inst.autoSceneSwitch !== false;
 
-  document.getElementById('btnCloseFilePicker').addEventListener('click', () => {
-    filePickerModal.style.display = 'none';
-  });
+  const activeScene = inst.scenes.find((s) => s.id === inst.activeSceneId) || inst.scenes[0];
+  const bannerName = document.getElementById('activeSceneBannerName');
+  if (bannerName) bannerName.textContent = activeScene ? activeScene.name : '--';
 
-  document.getElementById('btnPickerUploadNew').addEventListener('click', () => {
-    const tempInput = document.createElement('input');
-    tempInput.type = 'file';
-    tempInput.multiple = true;
-    tempInput.accept = 'audio/*,video/*,image/*';
-    tempInput.onchange = async (e) => {
-      const res = await uploadFilesToServer(e.target.files);
-      if (res && res.files && res.files.length > 0) {
-        renderPickerFilesList();
-      }
-    };
-    tempInput.click();
-  });
+  const reasonBadge = document.getElementById('lastSwitchReasonBadge');
+  if (reasonBadge) reasonBadge.textContent = inst.lastSwitchReason || 'Ready';
 
-  document.getElementById('btnQuickUploadSource').addEventListener('click', () => {
-    const tempInput = document.createElement('input');
-    tempInput.type = 'file';
-    tempInput.accept = 'audio/*,video/*,image/*';
-    tempInput.onchange = async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const res = await uploadFilesToServer([file]);
-      if (res && res.uploaded && res.uploaded[0]) {
-        const uploadedName = res.uploaded[0];
-        const found = cloudFilesList.find((f) => f.name === uploadedName);
-        if (found) addFileSourceToActiveScene(found);
-      }
-    };
-    tempInput.click();
-  });
+  const tag169 = document.getElementById('statusTag169');
+  if (tag169) tag169.textContent = inst.streamKey169 ? '16:9 Key Ready ✅' : 'No 16:9 Key';
 
-  // ---------------------------------------------------------------------------
-  // 5. Dual Scene Studio & 3 Scene Types (Default, Color-Detect, Network-Error)
-  // ---------------------------------------------------------------------------
-  function getActiveSceneObj() {
-    return studioScenes.find((s) => s.id === activeSceneId) || studioScenes[0];
+  const tag916 = document.getElementById('statusTag916');
+  if (tag916) tag916.textContent = inst.streamKey916 ? '9:16 Key Ready ✅' : 'No 9:16 Key';
+
+  const goLiveBtn = document.getElementById('studioGoLiveDualBtn');
+  const stopLiveBtn = document.getElementById('studioStopLiveBtn');
+  if (inst.status === 'live') {
+    goLiveBtn?.classList.add('hidden');
+    stopLiveBtn?.classList.remove('hidden');
+  } else {
+    goLiveBtn?.classList.remove('hidden');
+    stopLiveBtn?.classList.add('hidden');
   }
 
-  function openDualStudio(inst) {
-    activeInstanceId = inst.id;
-    studioInstanceName.textContent = `☁️ Dual Studio: ${inst.name}`;
-    studioScenes = JSON.parse(JSON.stringify(inst.scenes || []));
-    activeSceneId = inst.activeSceneId || (studioScenes[0] && studioScenes[0].id);
-    autoSceneSwitch = inst.autoSceneSwitch !== false;
-    chkAutoSceneSwitch.checked = autoSceneSwitch;
+  ensureFlvIngestPreview(inst);
+  renderScenesList(inst);
+  renderSceneConfigBox(inst);
+  renderSourcesList(inst);
+  renderSourceInspector(inst);
+  syncHiddenMediaElements(inst);
+}
 
-    const currentScene = getActiveSceneObj();
-    selectedSourceId = currentScene && currentScene.sources[0] ? currentScene.sources[0].id : null;
+function renderScenesList(inst) {
+  const container = document.getElementById('scenesListContainer');
+  if (!container) return;
 
-    rehydrateAllSceneMedia();
-    connectIncomingObsStream(inst);
-    syncSceneAudioPlayback();
-
-    renderStudioScenesList();
-    renderActiveSceneConfig();
-    renderStudioSourcesList();
-    renderSourceProperties();
-    syncStudioLiveButton(inst);
-    updateObsSignalUI(inst);
-
-    studioModal.style.display = 'flex';
-    setTimeout(fitDualCanvases, 50);
-  }
-
-  function updateObsSignalUI(inst) {
-    if (!studioObsSignalPill) return;
-    if (browserDisplayStream || (inst && inst.isPublishing)) {
-      hasIncomingSignal = true;
-      studioObsSignalPill.textContent = browserDisplayStream
-        ? '🖥️ Browser Window + Mic Active'
-        : '📡 OBS Stream Connected (Live)';
-      studioObsSignalPill.className = 'obs-signal-pill online';
-    } else {
-      hasIncomingSignal = false;
-      studioObsSignalPill.textContent = '⚠️ No OBS Signal (Network Error Standby)';
-      studioObsSignalPill.className = 'obs-signal-pill error';
-    }
-  }
-
-  function connectIncomingObsStream(inst) {
-    if (browserDisplayStream) return; // Using direct browser screen capture
-    if (incomingFlvPlayer) {
-      try {
-        incomingFlvPlayer.destroy();
-      } catch (_) {}
-      incomingFlvPlayer = null;
-    }
-
-    if (flvjs.isSupported() && inst && inst.streamKey) {
-      const proxyFlvUrl = `/api/flv-proxy/${inst.streamKey}.flv`;
-      incomingFlvPlayer = flvjs.createPlayer({
-        type: 'flv',
-        isLive: true,
-        hasAudio: true,
-        hasVideo: true,
-        url: proxyFlvUrl
-      });
-      incomingFlvPlayer.attachMediaElement(incomingVideoEl);
-      incomingFlvPlayer.load();
-      incomingFlvPlayer.play().catch(() => {});
-    }
-  }
-
-  // Optional Direct Browser Window + Voiceover Share
-  document.getElementById('btnShareBrowserWindow').addEventListener('click', async () => {
-    try {
-      browserDisplayStream = await navigator.mediaDevices.getDisplayMedia({
-        video: { width: 1920, height: 1080, frameRate: 30 },
-        audio: true
-      });
-      incomingVideoEl.srcObject = browserDisplayStream;
-      incomingVideoEl.muted = true; // Avoid local speaker echo; routed to WebAudio
-      await incomingVideoEl.play();
-      hasIncomingSignal = true;
-
-      const inst = instancesData.find((i) => i.id === activeInstanceId);
-      updateObsSignalUI(inst);
-
-      // If autoSceneSwitch is on and we were on network-error scene, switch to default!
-      if (autoSceneSwitch) {
-        const defScene = studioScenes.find((s) => s.type === 'default');
-        if (defScene) selectActiveScene(defScene.id, 'WINDOW SHARE STARTED -> DEFAULT');
-      }
-
-      browserDisplayStream.getVideoTracks()[0].addEventListener('ended', () => {
-        browserDisplayStream = null;
-        incomingVideoEl.srcObject = null;
-        const currInst = instancesData.find((i) => i.id === activeInstanceId);
-        updateObsSignalUI(currInst);
-        if (autoSceneSwitch && (!currInst || !currInst.isPublishing)) {
-          const netScene = studioScenes.find((s) => s.type === 'network-error');
-          if (netScene) selectActiveScene(netScene.id, 'WINDOW SHARE ENDED -> NETWORK ERROR');
-        }
-      });
-    } catch (err) {
-      alert('Window share cancelled: ' + err.message);
-    }
-  });
-
-  function rehydrateAllSceneMedia() {
-    studioScenes.forEach((sc) => {
-      (sc.sources || []).forEach((src) => {
-        if ((src.type === 'image' || src.type === 'video' || src.type === 'audio') && src.fileUrl) {
-          ensureMediaElement(src);
-        }
-      });
-    });
-  }
-
-  function ensureMediaElement(src) {
-    if (!src.fileUrl) return null;
-    const existing = mediaElementsMap.get(src.id);
-    if (existing && existing.dataset.srcUrl === src.fileUrl) {
-      return existing;
-    }
-
-    if (src.type === 'image') {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.src = src.fileUrl;
-      img.dataset.srcUrl = src.fileUrl;
-      mediaElementsMap.set(src.id, img);
-      return img;
-    }
-
-    if (src.type === 'video') {
-      const vid = document.createElement('video');
-      vid.crossOrigin = 'anonymous';
-      vid.src = src.fileUrl;
-      vid.loop = src.loop !== false;
-      vid.muted = false;
-      vid.volume = src.volume !== undefined ? src.volume : 1.0;
-      vid.playsInline = true;
-      vid.dataset.srcUrl = src.fileUrl;
-      mediaElementsMap.set(src.id, vid);
-      return vid;
-    }
-
-    if (src.type === 'audio') {
-      const aud = new Audio();
-      aud.crossOrigin = 'anonymous';
-      aud.src = src.fileUrl;
-      aud.loop = src.loop !== false;
-      aud.volume = src.volume !== undefined ? src.volume : 0.8;
-      aud.dataset.srcUrl = src.fileUrl;
-      mediaElementsMap.set(src.id, aud);
-      return aud;
-    }
-    return null;
-  }
-
-  function syncSceneAudioPlayback() {
-    const activeScene = getActiveSceneObj();
-    studioScenes.forEach((sc) => {
-      const isCurrent = activeScene && sc.id === activeScene.id;
-      (sc.sources || []).forEach((src) => {
-        const el = mediaElementsMap.get(src.id);
-        if (!el) return;
-        if (src.type === 'audio' || src.type === 'video') {
-          el.volume = src.volume !== undefined ? src.volume : 1.0;
-          el.loop = src.loop !== false;
-          if (isCurrent && src.visible !== false) {
-            el.play().catch(() => {});
-          } else {
-            try {
-              el.pause();
-            } catch (_) {}
-          }
-        }
-      });
-    });
-
-    // Mute/unmute incoming live audio based on scene setting
-    if (incomingAudioGain && audioCtx) {
-      const muteLive = activeScene && activeScene.muteIncomingAudio;
-      incomingAudioGain.gain.setValueAtTime(muteLive ? 0.0 : 1.0, audioCtx.currentTime);
-    }
-  }
-
-  // Switch Active Scene (Updates BOTH 16:9 and 9:16 simultaneously!)
-  async function selectActiveScene(sceneId, reason = 'MANUAL') {
-    const target = studioScenes.find((s) => s.id === sceneId);
-    if (!target) return;
-
-    activeSceneId = target.id;
-    if (bottomActiveSceneName) bottomActiveSceneName.textContent = target.name;
-
-    if (!target.sources.some((s) => s.id === selectedSourceId)) {
-      selectedSourceId = target.sources[0] ? target.sources[0].id : null;
-    }
-
-    syncSceneAudioPlayback();
-    renderStudioScenesList();
-    renderActiveSceneConfig();
-    renderStudioSourcesList();
-    renderSourceProperties();
-
-    if (activeInstanceId) {
-      fetch(`/api/instances/${activeInstanceId}/switch-scene`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sceneId: activeSceneId, reason, autoSceneSwitch })
-      }).catch(() => {});
-    }
-  }
-
-  // Listen for Backend Auto-Scene Switches (Color Detect or Network Drop)
-  socket.on('scene-switched', ({ instanceId, activeSceneId: newSceneId }) => {
-    if (instanceId === activeInstanceId && newSceneId !== activeSceneId) {
-      activeSceneId = newSceneId;
-      syncSceneAudioPlayback();
-      renderStudioScenesList();
-      renderActiveSceneConfig();
-      renderStudioSourcesList();
-      renderSourceProperties();
-    }
-  });
-
-  socket.on('color-telemetry', ({ instanceId, detectedColorHex }) => {
-    if (instanceId === activeInstanceId && detectedColorHex) {
-      if (detectedColorSwatch) detectedColorSwatch.style.background = detectedColorHex;
-      if (detectedColorCode) detectedColorCode.textContent = detectedColorHex.toUpperCase();
-    }
-  });
-
-  // ---------------------------------------------------------------------------
-  // 6. Client-Side Full-Screen Color Detector Loop (Runs every 250ms)
-  // ---------------------------------------------------------------------------
-  function hexToRgb(hex) {
-    const clean = String(hex || '#000000').replace('#', '').trim();
-    if (clean.length !== 6) return { r: 0, g: 0, b: 0 };
-    return {
-      r: parseInt(clean.substring(0, 2), 16) || 0,
-      g: parseInt(clean.substring(2, 4), 16) || 0,
-      b: parseInt(clean.substring(4, 6), 16) || 0
-    };
-  }
-
-  function rgbToHex(r, g, b) {
-    const h = (n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0');
-    return `#${h(r)}${h(g)}${h(b)}`;
-  }
-
-  setInterval(() => {
-    if (!activeInstanceId || incomingVideoEl.readyState < 2 || incomingVideoEl.paused) return;
-
-    try {
-      colorSampleCtx.drawImage(incomingVideoEl, 0, 0, 16, 16);
-      const data = colorSampleCtx.getImageData(0, 0, 16, 16).data;
-      const totalPixels = 256;
-
-      let sumR = 0, sumG = 0, sumB = 0;
-      for (let i = 0; i < data.length; i += 4) {
-        sumR += data[i];
-        sumG += data[i + 1];
-        sumB += data[i + 2];
-      }
-
-      const avgHex = rgbToHex(sumR / totalPixels, sumG / totalPixels, sumB / totalPixels);
-      if (detectedColorSwatch) detectedColorSwatch.style.background = avgHex;
-      if (detectedColorCode) detectedColorCode.textContent = avgHex.toUpperCase();
-
-      if (!autoSceneSwitch) return;
-
-      // Check all 'color-detect' scenes
-      const colorScenes = studioScenes.filter((s) => s.type === 'color-detect');
-      let matchedScene = null;
-
-      for (const sc of colorScenes) {
-        const target = hexToRgb(sc.triggerColor);
-        const tol = Number(sc.tolerance) || 35;
-        let matches = 0;
-
-        for (let i = 0; i < data.length; i += 4) {
-          const dist = Math.max(
-            Math.abs(data[i] - target.r),
-            Math.abs(data[i + 1] - target.g),
-            Math.abs(data[i + 2] - target.b)
-          );
-          if (dist <= tol) matches++;
-        }
-
-        if (matches / totalPixels >= 0.80) {
-          matchedScene = sc;
-          break;
-        }
-      }
-
-      if (matchedScene) {
-        noColorMatchCount = 0;
-        if (activeSceneId !== matchedScene.id) {
-          selectActiveScene(matchedScene.id, `AUTO COLOR DETECT (${matchedScene.triggerColor})`);
-        }
-      } else {
-        noColorMatchCount++;
-        const curr = getActiveSceneObj();
-        if (curr && curr.type === 'color-detect' && noColorMatchCount >= 3) {
-          const defScene = studioScenes.find((s) => s.type === 'default');
-          if (defScene && activeSceneId !== defScene.id) {
-            selectActiveScene(defScene.id, 'SCREEN COLOR CLEARED -> DEFAULT');
-          }
-        }
-      }
-    } catch (_) {}
-  }, 250);
-
-  chkAutoSceneSwitch.addEventListener('change', (e) => {
-    autoSceneSwitch = e.target.checked;
-    triggerSaveScenes();
-  });
-
-  // ---------------------------------------------------------------------------
-  // 7. Scene UI Rendering & Scene Creation (3 Scene Types)
-  // ---------------------------------------------------------------------------
-  const addSceneBox = document.getElementById('addSceneBox');
-  const newSceneName = document.getElementById('newSceneName');
-  const newSceneType = document.getElementById('newSceneType');
-  const newSceneColorGroup = document.getElementById('newSceneColorGroup');
-  const newSceneTriggerColor = document.getElementById('newSceneTriggerColor');
-  const newSceneTriggerHex = document.getElementById('newSceneTriggerHex');
-
-  document.getElementById('btnOpenAddScene').addEventListener('click', () => {
-    addSceneBox.style.display = addSceneBox.style.display === 'none' ? 'flex' : 'none';
-  });
-
-  document.getElementById('btnCancelAddScene').addEventListener('click', () => {
-    addSceneBox.style.display = 'none';
-  });
-
-  newSceneType.addEventListener('change', (e) => {
-    newSceneColorGroup.style.display = e.target.value === 'color-detect' ? 'flex' : 'none';
-  });
-
-  newSceneTriggerColor.addEventListener('input', (e) => {
-    newSceneTriggerHex.value = e.target.value;
-  });
-  newSceneTriggerHex.addEventListener('input', (e) => {
-    if (/^#[0-9a-fA-F]{6}$/.test(e.target.value)) {
-      newSceneTriggerColor.value = e.target.value;
-    }
-  });
-
-  document.getElementById('btnPickCurrentScreenColor').addEventListener('click', () => {
-    const hex = detectedColorCode.textContent;
-    if (hex && hex.startsWith('#')) {
-      newSceneTriggerColor.value = hex.toLowerCase();
-      newSceneTriggerHex.value = hex.toLowerCase();
-    }
-  });
-
-  document.getElementById('btnConfirmAddScene').addEventListener('click', () => {
-    const name = newSceneName.value.trim() || `Scene ${studioScenes.length + 1}`;
-    let type = newSceneType.value;
-
-    // Enforce Max 1 Default Scene rule
-    if (type === 'default' && studioScenes.some((s) => s.type === 'default')) {
-      alert('Maximum 1 Default Scene is allowed! Converting existing Default Scene or setting this as Color-Detect.');
-      return;
-    }
-
-    const newScene = {
-      id: 'scene_' + Date.now(),
-      name,
-      type,
-      triggerColor: newSceneTriggerHex.value || '#000000',
-      tolerance: 35,
-      muteIncomingAudio: type !== 'default',
-      sources: []
-    };
-
-    studioScenes.push(newScene);
-    addSceneBox.style.display = 'none';
-    newSceneName.value = '';
-    selectActiveScene(newScene.id, 'NEW SCENE CREATED');
-    triggerSaveScenes();
-  });
-
-  function renderStudioScenesList() {
-    if (!studioScenesList) return;
-    studioScenesList.innerHTML = '';
-
-    studioScenes.forEach((sc) => {
-      const isCurrent = sc.id === activeSceneId;
-      const card = document.createElement('div');
-      card.className = `scene-item-card ${isCurrent ? 'active' : ''}`;
-
-      let typeBadge = `<span class="scene-type-tag type-default">🟢 DEFAULT</span>`;
+  container.innerHTML = inst.scenes
+    .map((sc) => {
+      const isSelected = sc.id === selectedSceneId;
+      const isLiveActive = sc.id === inst.activeSceneId;
+      let typeLabel = '🟢 Default (Max 1)';
       if (sc.type === 'color-detect') {
-        typeBadge = `<span class="scene-type-tag type-color-detect"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sc.triggerColor};margin-right:4px;border:1px solid #fff;"></span>COLOR: ${sc.triggerColor}</span>`;
+        typeLabel = `<span class="mini-color-dot" style="background:${sc.triggerColor}"></span> Color: ${sc.triggerColor}`;
       } else if (sc.type === 'network-error') {
-        typeBadge = `<span class="scene-type-tag type-network-error">📡 NET ERROR</span>`;
+        typeLabel = '📡 Auto on OBS Loss';
       }
 
-      card.innerHTML = `
-        <div class="scene-card-top">
-          <span>${isCurrent ? '▶ ' : ''}${escapeHtml(sc.name)}</span>
-          ${typeBadge}
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--text-muted);">
-          <span>${(sc.sources || []).length} shared source(s)</span>
+      return `
+        <div class="scene-item ${isSelected ? 'active' : ''}" onclick="selectAndActivateScene('${sc.id}')">
+          <div class="scene-item-left">
+            <div class="scene-item-title">
+              ${isLiveActive ? '🔴 ' : ''}${escapeHtml(sc.name)}
+            </div>
+            <div class="scene-item-sub">${typeLabel} • ${sc.sources.length} layers</div>
+          </div>
           ${
-            studioScenes.length > 1
-              ? `<button class="btn-del-scene" style="background:none;border:none;color:var(--coral-red);cursor:pointer;font-size:11px;font-weight:700;">Delete</button>`
+            inst.scenes.length > 1
+              ? `<button class="btn-icon" style="width:24px;height:24px;font-size:0.7rem;" onclick="event.stopPropagation();deleteSceneFromStudio('${sc.id}')">✕</button>`
               : ''
           }
         </div>
       `;
+    })
+    .join('');
+}
 
-      card.addEventListener('click', (e) => {
-        if (!e.target.classList.contains('btn-del-scene')) {
-          selectActiveScene(sc.id, 'MANUAL STUDIO CLICK');
-        }
-      });
+window.selectAndActivateScene = async function (sceneId) {
+  selectedSceneId = sceneId;
+  const inst = getStudioInstance();
+  if (!inst) return;
+  inst.activeSceneId = sceneId;
+  syncStudioUI();
+  await window.quickSwitchScene(inst.id, sceneId);
+};
 
-      const delBtn = card.querySelector('.btn-del-scene');
-      if (delBtn) {
-        delBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          if (confirm(`Delete scene "${sc.name}"?`)) {
-            studioScenes = studioScenes.filter((item) => item.id !== sc.id);
-            selectActiveScene(studioScenes[0].id, 'SCENE DELETED');
-            triggerSaveScenes();
-          }
-        });
+window.deleteSceneFromStudio = function (sceneId) {
+  const inst = getStudioInstance();
+  if (!inst || inst.scenes.length <= 1) return;
+  inst.scenes = inst.scenes.filter((s) => s.id !== sceneId);
+  if (!inst.scenes.some((s) => s.type === 'default')) {
+    inst.scenes[0].type = 'default';
+  }
+  if (inst.activeSceneId === sceneId) {
+    inst.activeSceneId = inst.scenes[0].id;
+  }
+  selectedSceneId = inst.activeSceneId;
+  persistStudioInstance();
+};
+
+function renderSceneConfigBox(inst) {
+  const sc = getSelectedScene(inst);
+  if (!sc) return;
+
+  document.getElementById('sceneConfigNameLabel').textContent = sc.name;
+  document.getElementById('sceneConfigTypeBadge').textContent = sc.type.toUpperCase();
+  document.getElementById('editSceneNameInput').value = sc.name;
+  document.getElementById('editSceneTypeSelect').value = sc.type;
+  document.getElementById('editSceneTriggerColor').value = sc.triggerColor || '#000000';
+  document.getElementById('editSceneTriggerHex').value = sc.triggerColor || '#000000';
+  document.getElementById('editSceneTolerance').value = sc.colorTolerance || 32;
+  document.getElementById('toleranceValLabel').textContent = sc.colorTolerance || 32;
+  document.getElementById('editSceneBgColor').value = sc.bgColor || '#0f172a';
+  document.getElementById('editSceneBgHex').value = sc.bgColor || '#0f172a';
+
+  const colorGroup = document.getElementById('colorTriggerSettingsGroup');
+  if (colorGroup) {
+    colorGroup.classList.toggle('hidden', sc.type !== 'color-detect');
+  }
+}
+
+document.getElementById('editSceneNameInput')?.addEventListener('input', (e) => {
+  const inst = getStudioInstance();
+  const sc = getSelectedScene(inst);
+  if (!sc) return;
+  sc.name = e.target.value;
+  renderScenesList(inst);
+});
+
+document.getElementById('editSceneTypeSelect')?.addEventListener('change', (e) => {
+  const inst = getStudioInstance();
+  const sc = getSelectedScene(inst);
+  if (!sc) return;
+  const newType = e.target.value;
+
+  if (newType === 'default') {
+    inst.scenes.forEach((other) => {
+      if (other.id !== sc.id && other.type === 'default') {
+        other.type = 'color-detect';
       }
-
-      studioScenesList.appendChild(card);
     });
+  }
+  sc.type = newType;
+  persistStudioInstance();
+});
 
-    const curr = getActiveSceneObj();
-    if (curr && bottomActiveSceneName) {
-      bottomActiveSceneName.textContent = curr.name;
-    }
+document.getElementById('editSceneTriggerColor')?.addEventListener('input', (e) => {
+  const inst = getStudioInstance();
+  const sc = getSelectedScene(inst);
+  if (!sc) return;
+  sc.triggerColor = e.target.value;
+  document.getElementById('editSceneTriggerHex').value = e.target.value;
+  renderScenesList(inst);
+});
+
+document.getElementById('editSceneTriggerHex')?.addEventListener('change', (e) => {
+  const inst = getStudioInstance();
+  const sc = getSelectedScene(inst);
+  if (!sc) return;
+  const val = e.target.value.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+    sc.triggerColor = val.toLowerCase();
+    document.getElementById('editSceneTriggerColor').value = sc.triggerColor;
+    persistStudioInstance();
+  }
+});
+
+document.getElementById('editSceneTolerance')?.addEventListener('input', (e) => {
+  const inst = getStudioInstance();
+  const sc = getSelectedScene(inst);
+  if (!sc) return;
+  sc.colorTolerance = Number(e.target.value);
+  document.getElementById('toleranceValLabel').textContent = sc.colorTolerance;
+});
+
+document.getElementById('editSceneBgColor')?.addEventListener('input', (e) => {
+  const inst = getStudioInstance();
+  const sc = getSelectedScene(inst);
+  if (!sc) return;
+  sc.bgColor = e.target.value;
+  document.getElementById('editSceneBgHex').value = e.target.value;
+});
+
+document.getElementById('editSceneBgHex')?.addEventListener('change', (e) => {
+  const inst = getStudioInstance();
+  const sc = getSelectedScene(inst);
+  if (!sc) return;
+  const val = e.target.value.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+    sc.bgColor = val.toLowerCase();
+    document.getElementById('editSceneBgColor').value = sc.bgColor;
+    persistStudioInstance();
+  }
+});
+
+document.getElementById('pickCurrentScreenColorBtn')?.addEventListener('click', () => {
+  const inst = getStudioInstance();
+  const sc = getSelectedScene(inst);
+  if (!sc) return;
+  const sampled = sampleCurrentFeedHex();
+  if (!sampled) {
+    showToast('No incoming Window/OBS video frame available yet to sample!', 'error');
+    return;
+  }
+  sc.triggerColor = sampled;
+  document.getElementById('editSceneTriggerColor').value = sampled;
+  document.getElementById('editSceneTriggerHex').value = sampled;
+  persistStudioInstance();
+  showToast(`🎯 Captured Screen Color: ${sampled}`, 'success');
+});
+
+document.getElementById('studioAutoSwitchToggle')?.addEventListener('change', (e) => {
+  const inst = getStudioInstance();
+  if (!inst) return;
+  inst.autoSceneSwitch = e.target.checked;
+  persistStudioInstance();
+  showToast(`🤖 Auto Color & Signal Scene Switch: ${inst.autoSceneSwitch ? 'ENABLED' : 'DISABLED'}`, 'info');
+});
+
+const addSceneModal = document.getElementById('addSceneModal');
+document.getElementById('openAddSceneModalBtn')?.addEventListener('click', () => {
+  document.getElementById('newSceneNameInput').value = '';
+  document.getElementById('newSceneTypeSelect').value = 'color-detect';
+  document.getElementById('newSceneColorRow').classList.remove('hidden');
+  addSceneModal.classList.remove('hidden');
+});
+
+document.getElementById('newSceneTypeSelect')?.addEventListener('change', (e) => {
+  document.getElementById('newSceneColorRow').classList.toggle('hidden', e.target.value !== 'color-detect');
+});
+
+document.getElementById('newSceneColorPicker')?.addEventListener('input', (e) => {
+  document.getElementById('newSceneColorHex').value = e.target.value;
+});
+
+document.getElementById('closeAddSceneModalBtn')?.addEventListener('click', () => addSceneModal.classList.add('hidden'));
+document.getElementById('cancelAddSceneBtn')?.addEventListener('click', () => addSceneModal.classList.add('hidden'));
+
+document.getElementById('addSceneForm')?.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const inst = getStudioInstance();
+  if (!inst) return;
+
+  const name = document.getElementById('newSceneNameInput').value.trim();
+  const type = document.getElementById('newSceneTypeSelect').value;
+  const triggerColor = document.getElementById('newSceneColorHex').value.trim() || '#000000';
+
+  if (type === 'default') {
+    inst.scenes.forEach((s) => {
+      if (s.type === 'default') s.type = 'color-detect';
+    });
   }
 
-  function renderActiveSceneConfig() {
-    const sc = getActiveSceneObj();
-    if (!sc || !activeSceneConfigBox) return;
+  const newScene = {
+    id: 'scene_' + Date.now().toString(36),
+    name,
+    type,
+    triggerColor,
+    colorTolerance: 32,
+    bgColor: '#0f172a',
+    sources: [
+      {
+        id: 'src_' + Date.now().toString(36),
+        name: name + ' Banner',
+        type: 'text',
+        url: '',
+        text: name.toUpperCase(),
+        color: '#38bdf8',
+        volume: 1.0,
+        muted: true,
+        loop: true,
+        visible: true,
+        rect169: { x: 420, y: 450, w: 1080, h: 160 },
+        rect916: { x: 100, y: 820, w: 880, h: 200 }
+      }
+    ]
+  };
 
-    activeSceneConfigBox.innerHTML = `
-      <div style="font-weight:700;color:var(--text-navy);margin-bottom:6px;">⚙ Scene Settings: ${escapeHtml(sc.name)}</div>
-      <div class="form-group">
-        <label>Scene Role / Type</label>
-        <select id="editSceneType" class="sky-input-sm">
-          <option value="default" ${sc.type === 'default' ? 'selected' : ''}>🟢 1. Default Scene (Max 1 - Normal Live)</option>
-          <option value="color-detect" ${sc.type === 'color-detect' ? 'selected' : ''}>🎨 2. Color-Detect Scene (Auto Switch on Color)</option>
-          <option value="network-error" ${sc.type === 'network-error' ? 'selected' : ''}>📡 3. Network Error Scene (No OBS Signal)</option>
-        </select>
-      </div>
-      ${
-        sc.type === 'color-detect'
-          ? `
-        <div class="form-group" style="margin-top:6px;">
-          <label>Trigger Screen Color & Tolerance (±${sc.tolerance || 35})</label>
-          <div class="color-picker-row">
-            <input type="color" id="editSceneColor" value="${sc.triggerColor || '#000000'}">
-            <input type="text" id="editSceneHex" class="sky-input-sm" value="${sc.triggerColor || '#000000'}" style="width:85px;">
-            <input type="range" id="editSceneTol" min="10" max="80" value="${sc.tolerance || 35}" style="flex:1;" title="Color matching tolerance">
+  inst.scenes.push(newScene);
+  selectedSceneId = newScene.id;
+  inst.activeSceneId = newScene.id;
+  addSceneModal.classList.add('hidden');
+  persistStudioInstance();
+  showToast(`🎬 Created Scene "${name}"!`, 'success');
+});
+
+function renderSourcesList(inst) {
+  const container = document.getElementById('sourcesListContainer');
+  if (!container) return;
+
+  const sc = getSelectedScene(inst);
+  if (!sc || !Array.isArray(sc.sources) || sc.sources.length === 0) {
+    container.innerHTML = `<div style="font-size:0.78rem;color:var(--text-muted);padding:8px;">No sources in this scene. Click <strong>＋ Source</strong> to add one to both 16:9 &amp; 9:16!</div>`;
+    return;
+  }
+
+  const icons = {
+    'live-window': '🖥️',
+    image: '🖼️',
+    video: '🎞️',
+    audio: '🎵',
+    text: '🔤'
+  };
+
+  container.innerHTML = sc.sources
+    .map((src) => {
+      const active = src.id === selectedSourceId;
+      return `
+        <div class="source-item ${active ? 'active' : ''}" onclick="selectSourceLayer('${src.id}')">
+          <div class="scene-item-left">
+            <div class="scene-item-title">${icons[src.type] || '🧩'} ${escapeHtml(src.name)}</div>
+            <div class="scene-item-sub">${src.type.toUpperCase()} • Shared 16:9 &amp; 9:16</div>
           </div>
-          <button type="button" class="btn btn-xs btn-sky-soft" id="btnUseDetectedForScene" style="margin-top:4px;">🎯 Grab Current Screen Color</button>
-        </div>
-      `
-          : ''
-      }
-      <label style="display:flex;align-items:center;gap:6px;margin-top:8px;cursor:pointer;font-weight:600;">
-        <input type="checkbox" id="editSceneMuteLive" ${sc.muteIncomingAudio ? 'checked' : ''}>
-        <span>🔇 Mute Incoming Window Voiceover on this Scene</span>
-      </label>
-    `;
-
-    document.getElementById('editSceneType').addEventListener('change', (e) => {
-      const targetType = e.target.value;
-      if (targetType === 'default' && studioScenes.some((other) => other.id !== sc.id && other.type === 'default')) {
-        alert('Only 1 Default Scene is allowed! Change or remove the other Default Scene first.');
-        e.target.value = sc.type;
-        return;
-      }
-      sc.type = targetType;
-      renderStudioScenesList();
-      renderActiveSceneConfig();
-      triggerSaveScenes();
-    });
-
-    document.getElementById('editSceneMuteLive').addEventListener('change', (e) => {
-      sc.muteIncomingAudio = e.target.checked;
-      syncSceneAudioPlayback();
-      triggerSaveScenes();
-    });
-
-    if (sc.type === 'color-detect') {
-      const colInp = document.getElementById('editSceneColor');
-      const hexInp = document.getElementById('editSceneHex');
-      const tolInp = document.getElementById('editSceneTol');
-
-      colInp.addEventListener('input', (e) => {
-        sc.triggerColor = e.target.value;
-        hexInp.value = e.target.value;
-        renderStudioScenesList();
-        triggerSaveScenes();
-      });
-
-      hexInp.addEventListener('input', (e) => {
-        if (/^#[0-9a-fA-F]{6}$/.test(e.target.value)) {
-          sc.triggerColor = e.target.value;
-          colInp.value = e.target.value;
-          renderStudioScenesList();
-          triggerSaveScenes();
-        }
-      });
-
-      tolInp.addEventListener('input', (e) => {
-        sc.tolerance = parseInt(e.target.value, 10) || 35;
-        renderActiveSceneConfig();
-        triggerSaveScenes();
-      });
-
-      document.getElementById('btnUseDetectedForScene').addEventListener('click', () => {
-        const curHex = detectedColorCode.textContent;
-        if (curHex && curHex.startsWith('#')) {
-          sc.triggerColor = curHex.toLowerCase();
-          renderStudioScenesList();
-          renderActiveSceneConfig();
-          triggerSaveScenes();
-        }
-      });
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // 8. Shared Scene Sources & Independent 16:9 / 9:16 Coordinates
-  // ---------------------------------------------------------------------------
-  function addSharedSourceToScene(type, options = {}) {
-    const sc = getActiveSceneObj();
-    if (!sc) return;
-
-    const id = 'src_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4);
-    const newSource = {
-      id,
-      name: options.name || `${type.toUpperCase()} Source`,
-      type, // 'live-window' | 'video' | 'image' | 'audio' | 'text'
-      fileUrl: options.fileUrl || '',
-      text: options.text || '🌸 CUTE SKY LIVE ☁️',
-      color: options.color || '#ffffff',
-      bgColor: options.bgColor || 'rgba(43, 142, 255, 0.88)',
-      fontSize: options.fontSize || 46,
-      volume: options.volume !== undefined ? options.volume : 1.0,
-      loop: true,
-      visible: true,
-      // Independent 16:9 Landscape Coordinates (1920x1080)
-      rect169: options.rect169 || {
-        x: type === 'live-window' || type === 'video' ? 0 : 120,
-        y: type === 'live-window' || type === 'video' ? 0 : 100,
-        width: type === 'live-window' || type === 'video' ? 1920 : 650,
-        height: type === 'live-window' || type === 'video' ? 1080 : 140,
-        visible: true
-      },
-      // Independent 9:16 Vertical Shorts Coordinates (1080x1920)
-      rect916: options.rect916 || {
-        x: type === 'live-window' || type === 'video' ? 0 : 90,
-        y: type === 'live-window' || type === 'video' ? 300 : 220,
-        width: type === 'live-window' || type === 'video' ? 1080 : 900,
-        height: type === 'live-window' || type === 'video' ? 1320 : 160,
-        visible: true
-      }
-    };
-
-    sc.sources.push(newSource);
-    ensureMediaElement(newSource);
-    selectedSourceId = newSource.id;
-
-    syncSceneAudioPlayback();
-    renderStudioSourcesList();
-    renderSourceProperties();
-    renderStudioScenesList();
-    triggerSaveScenes();
-  }
-
-  function addFileSourceToActiveScene(fileObj) {
-    if (!fileObj) return;
-    if (fileObj.category === 'audio') {
-      addSharedSourceToScene('audio', {
-        name: `🎵 ${fileObj.name}`,
-        fileUrl: fileObj.url,
-        volume: 0.85
-      });
-    } else if (fileObj.category === 'image') {
-      addSharedSourceToScene('image', {
-        name: `🖼️ ${fileObj.name}`,
-        fileUrl: fileObj.url,
-        rect169: { x: 80, y: 60, width: 320, height: 320, visible: true },
-        rect916: { x: 380, y: 120, width: 320, height: 320, visible: true }
-      });
-    } else {
-      addSharedSourceToScene('video', {
-        name: `🎬 ${fileObj.name}`,
-        fileUrl: fileObj.url,
-        rect169: { x: 0, y: 0, width: 1920, height: 1080, visible: true },
-        rect916: { x: 0, y: 0, width: 1080, height: 1920, visible: true }
-      });
-    }
-  }
-
-  document.getElementById('btnAddLiveWindowSource').addEventListener('click', () => {
-    addSharedSourceToScene('live-window', {
-      name: '🖥️ Window + Voiceover (Live)',
-      rect169: { x: 0, y: 0, width: 1920, height: 1080, visible: true },
-      rect916: { x: 0, y: 350, width: 1080, height: 1220, visible: true }
-    });
-  });
-
-  document.getElementById('btnAddTextSource').addEventListener('click', () => {
-    addSharedSourceToScene('text', {
-      name: '🔤 Cute Sky Banner',
-      text: '🌸 PAUSE // BE RIGHT BACK ☁️',
-      rect169: { x: 400, y: 460, width: 1120, height: 140, visible: true },
-      rect916: { x: 80, y: 860, width: 920, height: 180, visible: true }
-    });
-  });
-
-  function renderStudioSourcesList() {
-    const sc = getActiveSceneObj();
-    if (!studioSourcesList || !sc) return;
-    studioSourcesList.innerHTML = '';
-
-    for (let i = sc.sources.length - 1; i >= 0; i--) {
-      const src = sc.sources[i];
-      const isSel = src.id === selectedSourceId;
-
-      const row = document.createElement('div');
-      row.style.padding = '8px 10px';
-      row.style.borderRadius = '10px';
-      row.style.background = isSel ? 'var(--sky-light)' : 'var(--cloud-soft)';
-      row.style.border = isSel ? '2px solid var(--sky-primary)' : '2px solid var(--sky-border)';
-      row.style.display = 'flex';
-      row.style.justifyContent = 'space-between';
-      row.style.alignItems = 'center';
-      row.style.cursor = 'pointer';
-
-      row.innerHTML = `
-        <span style="font-size:12px;font-weight:700;color:var(--text-navy);">${escapeHtml(src.name)}</span>
-        <div style="display:flex;gap:6px;">
-          <button class="btn-vis" style="background:none;border:none;cursor:pointer;">${src.visible !== false ? '👁' : '🚫'}</button>
+          <button class="btn-icon" style="width:24px;height:24px;font-size:0.72rem;"
+                  onclick="event.stopPropagation();toggleSourceVisibility('${src.id}')">
+            ${src.visible === false ? '🙈' : '👁️'}
+          </button>
         </div>
       `;
+    })
+    .join('');
+}
 
-      row.addEventListener('click', (e) => {
-        if (!e.target.classList.contains('btn-vis')) {
-          selectedSourceId = src.id;
-          renderStudioSourcesList();
-          renderSourceProperties();
-        }
-      });
+window.selectSourceLayer = function (srcId) {
+  selectedSourceId = srcId;
+  const inst = getStudioInstance();
+  if (!inst) return;
+  renderSourcesList(inst);
+  renderSourceInspector(inst);
+};
 
-      row.querySelector('.btn-vis').addEventListener('click', (e) => {
-        e.stopPropagation();
-        src.visible = src.visible === false ? true : false;
-        syncSceneAudioPlayback();
-        renderStudioSourcesList();
-        triggerSaveScenes();
-      });
+window.toggleSourceVisibility = function (srcId) {
+  const inst = getStudioInstance();
+  const sc = getSelectedScene(inst);
+  if (!sc) return;
+  const src = sc.sources.find((s) => s.id === srcId);
+  if (!src) return;
+  src.visible = src.visible === false ? true : false;
+  persistStudioInstance();
+};
 
-      studioSourcesList.appendChild(row);
-    }
+function getSelectedSource(inst) {
+  const sc = getSelectedScene(inst);
+  if (!sc) return null;
+  return sc.sources.find((s) => s.id === selectedSourceId) || sc.sources[0] || null;
+}
+
+function renderSourceInspector(inst) {
+  const box = document.getElementById('selectedSourceInspector');
+  if (!box) return;
+
+  const src = getSelectedSource(inst);
+  if (!src) {
+    box.classList.add('hidden');
+    return;
   }
 
-  function getSelectedSource() {
-    const sc = getActiveSceneObj();
-    if (!sc) return null;
-    return (sc.sources || []).find((s) => s.id === selectedSourceId) || null;
+  selectedSourceId = src.id;
+  box.classList.remove('hidden');
+
+  document.getElementById('inspectorSourceName').textContent = src.name;
+  document.getElementById('inspectSrcNameInput').value = src.name;
+
+  const textGroup = document.getElementById('inspectTextGroup');
+  if (textGroup) {
+    textGroup.classList.toggle('hidden', src.type !== 'text');
+    document.getElementById('inspectSrcTextInput').value = src.text || '';
+    document.getElementById('inspectSrcColorInput').value = src.color || '#38bdf8';
   }
 
-  function renderSourceProperties() {
-    const src = getSelectedSource();
-    if (!src) {
-      studioPropertiesForm.innerHTML = `<p class="empty-panel-hint">Select a source to set its 16:9 and 9:16 coordinates.</p>`;
-      return;
-    }
-
-    if (!src.rect169) src.rect169 = { x: 0, y: 0, width: 600, height: 300, visible: true };
-    if (!src.rect916) src.rect916 = { x: 0, y: 0, width: 600, height: 300, visible: true };
-
-    studioPropertiesForm.innerHTML = `
-      <div class="form-group">
-        <label>Source Name</label>
-        <input type="text" id="propSrcName" class="sky-input-sm" value="${escapeHtml(src.name)}">
-      </div>
-
-      ${
-        src.type === 'audio' || src.type === 'video'
-          ? `
-        <div class="form-group" style="margin-top:8px;">
-          <label>🎵 Audio Volume (${Math.round((src.volume ?? 1) * 100)}%)</label>
-          <input type="range" id="propSrcVol" min="0" max="1" step="0.05" value="${src.volume ?? 1}">
-        </div>
-      `
-          : ''
-      }
-
-      ${
-        src.type === 'text'
-          ? `
-        <div class="form-group" style="margin-top:8px;">
-          <label>Banner Text</label>
-          <input type="text" id="propSrcText" class="sky-input-sm" value="${escapeHtml(src.text || '')}">
-        </div>
-        <div class="form-row" style="margin-top:6px;">
-          <div class="form-group">
-            <label>Font Size</label>
-            <input type="number" id="propSrcFont" class="sky-input-sm" value="${src.fontSize || 46}">
-          </div>
-          <div class="form-group">
-            <label>Text Color</label>
-            <input type="color" id="propSrcColor" class="sky-input-sm" value="${src.color || '#ffffff'}">
-          </div>
-        </div>
-      `
-          : ''
-      }
-
-      ${
-        src.type !== 'audio'
-          ? `
-        <!-- 16:9 INDEPENDENT COORDINATES -->
-        <div class="coord-box">
-          <div class="coord-box-title">
-            <span>📺 16:9 Landscape Position</span>
-            <label><input type="checkbox" id="propVis169" ${src.rect169.visible !== false ? 'checked' : ''}> Show</label>
-          </div>
-          <div class="form-row">
-            <div class="form-group"><label>X</label><input type="number" id="p169X" class="sky-input-sm" value="${src.rect169.x}"></div>
-            <div class="form-group"><label>Y</label><input type="number" id="p169Y" class="sky-input-sm" value="${src.rect169.y}"></div>
-          </div>
-          <div class="form-row" style="margin-top:4px;">
-            <div class="form-group"><label>W</label><input type="number" id="p169W" class="sky-input-sm" value="${src.rect169.width}"></div>
-            <div class="form-group"><label>H</label><input type="number" id="p169H" class="sky-input-sm" value="${src.rect169.height}"></div>
-          </div>
-        </div>
-
-        <!-- 9:16 INDEPENDENT COORDINATES -->
-        <div class="coord-box box-916">
-          <div class="coord-box-title">
-            <span>📱 9:16 Vertical Shorts Position</span>
-            <label><input type="checkbox" id="propVis916" ${src.rect916.visible !== false ? 'checked' : ''}> Show</label>
-          </div>
-          <div class="form-row">
-            <div class="form-group"><label>X</label><input type="number" id="p916X" class="sky-input-sm" value="${src.rect916.x}"></div>
-            <div class="form-group"><label>Y</label><input type="number" id="p916Y" class="sky-input-sm" value="${src.rect916.y}"></div>
-          </div>
-          <div class="form-row" style="margin-top:4px;">
-            <div class="form-group"><label>W</label><input type="number" id="p916W" class="sky-input-sm" value="${src.rect916.width}"></div>
-            <div class="form-group"><label>H</label><input type="number" id="p916H" class="sky-input-sm" value="${src.rect916.height}"></div>
-          </div>
-        </div>
-      `
-          : `<p class="tiny-hint" style="margin-top:10px;">🎵 Background music plays automatically whenever this scene is active on both 16:9 and 9:16!</p>`
-      }
-
-      <button class="btn btn-xs btn-danger-soft" id="btnDeleteSource" style="width:100%;margin-top:12px;">🗑 Remove Source from Scene</button>
-    `;
-
-    document.getElementById('propSrcName').addEventListener('input', (e) => {
-      src.name = e.target.value;
-      renderStudioSourcesList();
-      triggerSaveScenes();
-    });
-
-    const volInp = document.getElementById('propSrcVol');
-    if (volInp) {
-      volInp.addEventListener('input', (e) => {
-        src.volume = parseFloat(e.target.value) || 0;
-        syncSceneAudioPlayback();
-        renderSourceProperties();
-        triggerSaveScenes();
-      });
-    }
-
-    if (src.type === 'text') {
-      document.getElementById('propSrcText').addEventListener('input', (e) => {
-        src.text = e.target.value;
-        triggerSaveScenes();
-      });
-      document.getElementById('propSrcFont').addEventListener('input', (e) => {
-        src.fontSize = parseInt(e.target.value, 10) || 32;
-        triggerSaveScenes();
-      });
-      document.getElementById('propSrcColor').addEventListener('input', (e) => {
-        src.color = e.target.value;
-        triggerSaveScenes();
-      });
-    }
-
-    if (src.type !== 'audio') {
-      const bindCoord = (id, rectObj, prop) => {
-        const el = document.getElementById(id);
-        if (el) {
-          el.addEventListener('input', (e) => {
-            rectObj[prop] = parseInt(e.target.value, 10) || 0;
-            triggerSaveScenes();
-          });
-        }
-      };
-      bindCoord('p169X', src.rect169, 'x');
-      bindCoord('p169Y', src.rect169, 'y');
-      bindCoord('p169W', src.rect169, 'width');
-      bindCoord('p169H', src.rect169, 'height');
-      bindCoord('p916X', src.rect916, 'x');
-      bindCoord('p916Y', src.rect916, 'y');
-      bindCoord('p916W', src.rect916, 'width');
-      bindCoord('p916H', src.rect916, 'height');
-
-      document.getElementById('propVis169').addEventListener('change', (e) => {
-        src.rect169.visible = e.target.checked;
-        triggerSaveScenes();
-      });
-      document.getElementById('propVis916').addEventListener('change', (e) => {
-        src.rect916.visible = e.target.checked;
-        triggerSaveScenes();
-      });
-    }
-
-    document.getElementById('btnDeleteSource').addEventListener('click', () => {
-      const sc = getActiveSceneObj();
-      if (!sc) return;
-      sc.sources = sc.sources.filter((s) => s.id !== src.id);
-      selectedSourceId = sc.sources[0] ? sc.sources[0].id : null;
-      syncSceneAudioPlayback();
-      renderStudioSourcesList();
-      renderSourceProperties();
-      triggerSaveScenes();
-    });
+  const audioGroup = document.getElementById('inspectAudioGroup');
+  if (audioGroup) {
+    const hasAudio = ['live-window', 'video', 'audio'].includes(src.type);
+    audioGroup.classList.toggle('hidden', !hasAudio);
+    const volPct = Math.round((src.volume !== undefined ? src.volume : 1) * 100);
+    document.getElementById('inspectVolLabel').textContent = `${volPct}%`;
+    document.getElementById('inspectSrcVolumeRange').value = volPct;
+    document.getElementById('inspectSrcMuteCheck').checked = Boolean(src.muted);
   }
 
-  // Quick Fit & Center Buttons for 16:9 and 9:16 Monitors
-  document.getElementById('btnFitSource169').addEventListener('click', () => {
-    const src = getSelectedSource();
-    if (!src || !src.rect169) return;
-    src.rect169 = { x: 0, y: 0, width: 1920, height: 1080, visible: true };
-    renderSourceProperties();
-    triggerSaveScenes();
+  const r169 = src.rect169 || { x: 0, y: 0, w: 640, h: 360 };
+  const r916 = src.rect916 || { x: 40, y: 400, w: 1000, h: 600 };
+
+  document.getElementById('in169X').value = Math.round(r169.x);
+  document.getElementById('in169Y').value = Math.round(r169.y);
+  document.getElementById('in169W').value = Math.round(r169.w);
+  document.getElementById('in169H').value = Math.round(r169.h);
+
+  document.getElementById('in916X').value = Math.round(r916.x);
+  document.getElementById('in916Y').value = Math.round(r916.y);
+  document.getElementById('in916W').value = Math.round(r916.w);
+  document.getElementById('in916H').value = Math.round(r916.h);
+
+  updateCoordReadoutLabels(src);
+}
+
+function updateCoordReadoutLabels(src) {
+  if (!src) return;
+  const r169 = src.rect169 || { x: 0, y: 0, w: 0, h: 0 };
+  const r916 = src.rect916 || { x: 0, y: 0, w: 0, h: 0 };
+  const el169 = document.getElementById('coordReadout169');
+  const el916 = document.getElementById('coordReadout916');
+  if (el169) el169.textContent = `${src.name} (16:9): x:${Math.round(r169.x)} y:${Math.round(r169.y)} w:${Math.round(r169.w)} h:${Math.round(r169.h)}`;
+  if (el916) el916.textContent = `${src.name} (9:16): x:${Math.round(r916.x)} y:${Math.round(r916.y)} w:${Math.round(r916.w)} h:${Math.round(r916.h)}`;
+}
+
+document.getElementById('inspectSrcNameInput')?.addEventListener('input', (e) => {
+  const inst = getStudioInstance();
+  const src = getSelectedSource(inst);
+  if (!src) return;
+  src.name = e.target.value;
+  renderSourcesList(inst);
+});
+
+document.getElementById('inspectSrcTextInput')?.addEventListener('input', (e) => {
+  const inst = getStudioInstance();
+  const src = getSelectedSource(inst);
+  if (!src) return;
+  src.text = e.target.value;
+});
+
+document.getElementById('inspectSrcColorInput')?.addEventListener('input', (e) => {
+  const inst = getStudioInstance();
+  const src = getSelectedSource(inst);
+  if (!src) return;
+  src.color = e.target.value;
+});
+
+document.getElementById('inspectSrcVolumeRange')?.addEventListener('input', (e) => {
+  const inst = getStudioInstance();
+  const src = getSelectedSource(inst);
+  if (!src) return;
+  src.volume = Number(e.target.value) / 100;
+  document.getElementById('inspectVolLabel').textContent = `${e.target.value}%`;
+  syncHiddenMediaElements(inst);
+});
+
+document.getElementById('inspectSrcMuteCheck')?.addEventListener('change', (e) => {
+  const inst = getStudioInstance();
+  const src = getSelectedSource(inst);
+  if (!src) return;
+  src.muted = e.target.checked;
+  syncHiddenMediaElements(inst);
+});
+
+['X', 'Y', 'W', 'H'].forEach((axis) => {
+  const key = axis.toLowerCase();
+  document.getElementById(`in169${axis}`)?.addEventListener('input', (e) => {
+    const inst = getStudioInstance();
+    const src = getSelectedSource(inst);
+    if (!src) return;
+    src.rect169[key] = Number(e.target.value) || 0;
+    updateCoordReadoutLabels(src);
+  });
+  document.getElementById(`in916${axis}`)?.addEventListener('input', (e) => {
+    const inst = getStudioInstance();
+    const src = getSelectedSource(inst);
+    if (!src) return;
+    src.rect916[key] = Number(e.target.value) || 0;
+    updateCoordReadoutLabels(src);
+  });
+});
+
+document.getElementById('fit169FullBtn')?.addEventListener('click', () => {
+  const src = getSelectedSource(getStudioInstance());
+  if (!src) return;
+  src.rect169 = { x: 0, y: 0, w: 1920, h: 1080 };
+  renderSourceInspector(getStudioInstance());
+});
+
+document.getElementById('center169Btn')?.addEventListener('click', () => {
+  const src = getSelectedSource(getStudioInstance());
+  if (!src) return;
+  src.rect169.x = Math.round((1920 - src.rect169.w) / 2);
+  src.rect169.y = Math.round((1080 - src.rect169.h) / 2);
+  renderSourceInspector(getStudioInstance());
+});
+
+document.getElementById('fit916FullBtn')?.addEventListener('click', () => {
+  const src = getSelectedSource(getStudioInstance());
+  if (!src) return;
+  src.rect916 = { x: 0, y: 0, w: 1080, h: 1920 };
+  renderSourceInspector(getStudioInstance());
+});
+
+document.getElementById('center916Btn')?.addEventListener('click', () => {
+  const src = getSelectedSource(getStudioInstance());
+  if (!src) return;
+  src.rect916.x = Math.round((1080 - src.rect916.w) / 2);
+  src.rect916.y = Math.round((1920 - src.rect916.h) / 2);
+  renderSourceInspector(getStudioInstance());
+});
+
+document.getElementById('deleteSelectedSourceBtn')?.addEventListener('click', () => {
+  const inst = getStudioInstance();
+  const sc = getSelectedScene(inst);
+  if (!sc || !selectedSourceId) return;
+  sc.sources = sc.sources.filter((s) => s.id !== selectedSourceId);
+  selectedSourceId = sc.sources[0]?.id || null;
+  persistStudioInstance();
+});
+
+const addSourceModal = document.getElementById('addSourceModal');
+const newSourceTypeSelect = document.getElementById('newSourceTypeSelect');
+
+function populateModalFileSelect() {
+  const sel = document.getElementById('newSourceCloudFileSelect');
+  if (!sel) return;
+  const type = newSourceTypeSelect?.value || 'image';
+  const matching = cloudFiles.filter((f) => {
+    if (type === 'image') return f.category === 'image';
+    if (type === 'video') return f.category === 'video';
+    if (type === 'audio') return f.category === 'audio';
+    return true;
   });
 
-  document.getElementById('btnCenterSource169').addEventListener('click', () => {
-    const src = getSelectedSource();
-    if (!src || !src.rect169) return;
-    src.rect169.x = Math.round((1920 - src.rect169.width) / 2);
-    src.rect169.y = Math.round((1080 - src.rect169.height) / 2);
-    renderSourceProperties();
-    triggerSaveScenes();
-  });
+  if (matching.length === 0) {
+    sel.innerHTML = `<option value="">-- No ${type} files uploaded yet (Click Upload New) --</option>`;
+  } else {
+    sel.innerHTML = matching
+      .map((f) => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.displayName)} (${formatBytes(f.sizeBytes)})</option>`)
+      .join('');
+  }
+}
 
-  document.getElementById('btnFitSource916').addEventListener('click', () => {
-    const src = getSelectedSource();
-    if (!src || !src.rect916) return;
-    src.rect916 = { x: 0, y: 0, width: 1080, height: 1920, visible: true };
-    renderSourceProperties();
-    triggerSaveScenes();
-  });
+function updateAddSourceModalFields() {
+  const type = newSourceTypeSelect.value;
+  const fileRow = document.getElementById('newSourceFileSelectRow');
+  const textRow = document.getElementById('newSourceTextRow');
 
-  document.getElementById('btnCenterSource916').addEventListener('click', () => {
-    const src = getSelectedSource();
-    if (!src || !src.rect916) return;
-    src.rect916.x = Math.round((1080 - src.rect916.width) / 2);
-    src.rect916.y = Math.round((1920 - src.rect916.height) / 2);
-    renderSourceProperties();
-    triggerSaveScenes();
-  });
+  fileRow.classList.toggle('hidden', !['image', 'video', 'audio'].includes(type));
+  textRow.classList.toggle('hidden', type !== 'text');
+  populateModalFileSelect();
+}
 
-  // ---------------------------------------------------------------------------
-  // 9. Dual Canvas Render Loop & Independent Drag/Resize on Both Screens
-  // ---------------------------------------------------------------------------
-  function drawSceneOnCanvas(context, W, H, rectKey) {
-    // Cute Sky Pastel Canvas Backdrop
-    const grad = context.createLinearGradient(0, 0, 0, H);
-    grad.addColorStop(0, '#8fd3fe');
-    grad.addColorStop(1, '#dff2ff');
-    context.fillStyle = grad;
-    context.fillRect(0, 0, W, H);
+newSourceTypeSelect?.addEventListener('change', updateAddSourceModalFields);
 
-    const sc = getActiveSceneObj();
-    if (!sc) return;
+document.getElementById('openAddSourceModalBtn')?.addEventListener('click', () => {
+  document.getElementById('newSourceNameInput').value = '';
+  newSourceTypeSelect.value = 'image';
+  updateAddSourceModalFields();
+  addSourceModal.classList.remove('hidden');
+});
 
-    (sc.sources || []).forEach((src) => {
-      if (src.visible === false || src.type === 'audio') return;
-      const r = src[rectKey];
-      if (!r || r.visible === false) return;
+document.getElementById('closeAddSourceModalBtn')?.addEventListener('click', () => addSourceModal.classList.add('hidden'));
+document.getElementById('cancelAddSourceBtn')?.addEventListener('click', () => addSourceModal.classList.add('hidden'));
 
-      if (src.type === 'live-window') {
-        if (incomingVideoEl.readyState >= 2) {
-          context.drawImage(incomingVideoEl, r.x, r.y, r.width, r.height);
-        } else {
-          context.fillStyle = 'rgba(22, 50, 92, 0.78)';
-          context.fillRect(r.x, r.y, r.width, r.height);
-          context.fillStyle = '#ffffff';
-          context.font = '700 34px Fredoka, sans-serif';
-          context.textAlign = 'center';
-          context.fillText('🖥️ Waiting for OBS / Window Stream...', r.x + r.width / 2, r.y + r.height / 2);
-          context.textAlign = 'left';
-        }
-      } else if (src.type === 'image') {
-        const img = ensureMediaElement(src);
-        if (img && img.complete && img.naturalWidth > 0) {
-          context.drawImage(img, r.x, r.y, r.width, r.height);
-        }
-      } else if (src.type === 'video') {
-        const vid = ensureMediaElement(src);
-        if (vid && vid.readyState >= 2) {
-          context.drawImage(vid, r.x, r.y, r.width, r.height);
-        } else {
-          context.fillStyle = 'rgba(43, 142, 255, 0.35)';
-          context.fillRect(r.x, r.y, r.width, r.height);
-        }
-      } else if (src.type === 'text') {
-        context.fillStyle = src.bgColor || 'rgba(43, 142, 255, 0.88)';
-        context.beginPath();
-        context.roundRect(r.x, r.y, r.width, r.height, 24);
-        context.fill();
-        context.lineWidth = 4;
-        context.strokeStyle = '#ffffff';
-        context.stroke();
+document.getElementById('addSourceForm')?.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const inst = getStudioInstance();
+  const sc = getSelectedScene(inst);
+  if (!inst || !sc) return;
 
-        context.fillStyle = src.color || '#ffffff';
-        context.font = `700 ${src.fontSize || 46}px 'Fredoka', sans-serif`;
-        context.textBaseline = 'middle';
-        context.textAlign = 'center';
-        context.fillText(src.text || '', r.x + r.width / 2, r.y + r.height / 2);
-        context.textAlign = 'left';
-      }
+  const type = newSourceTypeSelect.value;
+  const name = document.getElementById('newSourceNameInput').value.trim() || 'Layer';
+  const fileId = document.getElementById('newSourceCloudFileSelect').value;
+  const fileObj = cloudFiles.find((f) => f.id === fileId);
 
-      // Draw selection frame & resize handle if selected
-      if (src.id === selectedSourceId) {
-        context.strokeStyle = '#ff7aa2';
-        context.lineWidth = 5;
-        context.strokeRect(r.x, r.y, r.width, r.height);
-
-        context.fillStyle = '#ffffff';
-        context.fillRect(r.x + r.width - 16, r.y + r.height - 16, 32, 32);
-        context.strokeStyle = '#ff7aa2';
-        context.strokeRect(r.x + r.width - 16, r.y + r.height - 16, 32, 32);
-      }
-    });
+  if (['image', 'video', 'audio'].includes(type) && !fileObj) {
+    showToast('Please upload or select a file from the Cloud File System first!', 'error');
+    return;
   }
 
-  function renderDualCanvasesLoop() {
-    drawSceneOnCanvas(ctx169, 1920, 1080, 'rect169');
-    drawSceneOnCanvas(ctx916, 1080, 1920, 'rect916');
-    requestAnimationFrame(renderDualCanvasesLoop);
-  }
-  renderDualCanvasesLoop();
+  let rect169 = { x: 120, y: 120, w: 600, h: 340 };
+  let rect916 = { x: 90, y: 460, w: 900, h: 520 };
 
-  function getCanvasCoords(e, canvasEl) {
-    const rect = canvasEl.getBoundingClientRect();
-    const scaleX = canvasEl.width / rect.width;
-    const scaleY = canvasEl.height / rect.height;
-    let cx = e.clientX;
-    let cy = e.clientY;
-    if (e.touches && e.touches.length > 0) {
-      cx = e.touches[0].clientX;
-      cy = e.touches[0].clientY;
-    }
-    return {
-      x: (cx - rect.left) * scaleX,
-      y: (cy - rect.top) * scaleY
-    };
+  if (type === 'live-window' || type === 'video') {
+    rect169 = { x: 0, y: 0, w: 1920, h: 1080 };
+    rect916 = { x: 40, y: 420, w: 1000, h: 600 };
+  } else if (type === 'image') {
+    rect169 = { x: 80, y: 60, w: 260, h: 260 };
+    rect916 = { x: 410, y: 100, w: 260, h: 260 };
+  } else if (type === 'text') {
+    rect169 = { x: 360, y: 440, w: 1200, h: 140 };
+    rect916 = { x: 80, y: 840, w: 920, h: 160 };
   }
 
-  function onCanvasDown(e, ratioKey, canvasEl) {
-    const rectProp = ratioKey === '9:16' ? 'rect916' : 'rect169';
-    const { x, y } = getCanvasCoords(e, canvasEl);
-    const sc = getActiveSceneObj();
-    if (!sc) return;
+  const newSrc = {
+    id: 'src_' + Date.now().toString(36),
+    name,
+    type,
+    fileId: fileObj ? fileObj.id : '',
+    url: fileObj ? fileObj.url : '',
+    text: document.getElementById('newSourceTextValue').value || name,
+    color: document.getElementById('newSourceTextColor').value || '#38bdf8',
+    volume: 1.0,
+    muted: false,
+    loop: true,
+    visible: true,
+    rect169,
+    rect916
+  };
 
-    const sel = getSelectedSource();
-    if (sel && sel[rectProp] && sel.type !== 'audio') {
-      const r = sel[rectProp];
-      if (Math.abs(x - (r.x + r.width)) < 45 && Math.abs(y - (r.y + r.height)) < 45) {
-        activeDragCanvas = ratioKey;
-        isResizing = true;
-        dragStartPos = { x, y };
-        initialRect = { ...r };
-        return;
-      }
-    }
+  sc.sources.push(newSrc);
+  selectedSourceId = newSrc.id;
+  addSourceModal.classList.add('hidden');
+  persistStudioInstance();
+  showToast(`✨ Added "${name}" to both 16:9 & 9:16!`, 'success');
+});
 
-    for (let i = sc.sources.length - 1; i >= 0; i--) {
-      const s = sc.sources[i];
-      if (s.type === 'audio' || s.visible === false) continue;
-      const r = s[rectProp];
-      if (r && r.visible !== false && x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height) {
-        selectedSourceId = s.id;
-        activeDragCanvas = ratioKey;
-        isDragging = true;
-        dragStartPos = { x, y };
-        initialRect = { ...r };
-        renderStudioSourcesList();
-        renderSourceProperties();
-        return;
-      }
-    }
-  }
-
-  function onWindowMove(e) {
-    if (!isDragging && !isResizing) return;
-    const canvasEl = activeDragCanvas === '9:16' ? canvas916 : canvas169;
-    const rectProp = activeDragCanvas === '9:16' ? 'rect916' : 'rect169';
-    const { x, y } = getCanvasCoords(e, canvasEl);
-    const sel = getSelectedSource();
-    if (!sel || !sel[rectProp]) return;
-
-    if (isDragging) {
-      sel[rectProp].x = Math.round(initialRect.x + (x - dragStartPos.x));
-      sel[rectProp].y = Math.round(initialRect.y + (y - dragStartPos.y));
-    } else if (isResizing) {
-      sel[rectProp].width = Math.max(60, Math.round(initialRect.width + (x - dragStartPos.x)));
-      sel[rectProp].height = Math.max(40, Math.round(initialRect.height + (y - dragStartPos.y)));
-    }
-    renderSourceProperties();
-  }
-
-  function onWindowUp() {
-    if (isDragging || isResizing) {
-      isDragging = false;
-      isResizing = false;
-      activeDragCanvas = null;
-      triggerSaveScenes();
-    }
-  }
-
-  canvas169.addEventListener('mousedown', (e) => onCanvasDown(e, '16:9', canvas169));
-  canvas916.addEventListener('mousedown', (e) => onCanvasDown(e, '9:16', canvas916));
-  window.addEventListener('mousemove', onWindowMove);
-  window.addEventListener('mouseup', onWindowUp);
-
-  canvas169.addEventListener('touchstart', (e) => { e.preventDefault(); onCanvasDown(e, '16:9', canvas169); }, { passive: false });
-  canvas916.addEventListener('touchstart', (e) => { e.preventDefault(); onCanvasDown(e, '9:16', canvas916); }, { passive: false });
-  window.addEventListener('touchmove', (e) => { if (isDragging || isResizing) { e.preventDefault(); onWindowMove(e); } }, { passive: false });
-  window.addEventListener('touchend', onWindowUp);
-
-  // ---------------------------------------------------------------------------
-  // 10. Save Scenes & Simultaneous Dual Live Streaming (16:9 + 9:16)
-  // ---------------------------------------------------------------------------
-  async function saveScenesToServer(showAlert = false) {
-    if (!activeInstanceId) return;
-    if (saveStatusTag) saveStatusTag.textContent = 'Saving...';
-
-    try {
-      await fetch(`/api/instances/${activeInstanceId}/scenes`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          scenes: studioScenes,
-          activeSceneId,
-          autoSceneSwitch
-        })
-      });
-      if (saveStatusTag) saveStatusTag.textContent = '✓ Saved';
-      if (showAlert) alert('☁️ All Scenes & 16:9 + 9:16 Layouts Saved!');
-    } catch (_) {
-      if (saveStatusTag) saveStatusTag.textContent = 'Saved Locally';
-    }
-  }
-
-  function triggerSaveScenes() {
-    clearTimeout(saveDebounceTimer);
-    saveDebounceTimer = setTimeout(() => saveScenesToServer(false), 900);
-  }
-
-  document.getElementById('btnSaveScenes').addEventListener('click', () => saveScenesToServer(true));
-  document.getElementById('btnCloseStudioModal').addEventListener('click', () => {
-    saveScenesToServer(false);
-    studioModal.style.display = 'none';
-  });
-
-  // Web Audio Mixer (Carrier + Incoming Window Audio + Scene BG Music + Optional Mic)
-  function getMixedAudioTrack() {
-    if (!audioCtx) {
-      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-      audioCtx = new AudioContextClass();
-      audioDestNode = audioCtx.createMediaStreamDestination();
-
-      // Inaudible carrier oscillator so RTMP never drops during silent transitions
-      const osc = audioCtx.createOscillator();
-      const oscGain = audioCtx.createGain();
-      oscGain.gain.setValueAtTime(0.0001, audioCtx.currentTime);
-      osc.connect(oscGain);
-      oscGain.connect(audioDestNode);
-      osc.start();
-
-      // Incoming Window/OBS audio node
-      incomingAudioGain = audioCtx.createGain();
-      incomingAudioGain.connect(audioDestNode);
-      try {
-        const incNode = audioCtx.createMediaElementSource(incomingVideoEl);
-        incNode.connect(incomingAudioGain);
-        incNode.connect(audioCtx.destination);
-      } catch (_) {}
-
-      // Mic gain node
-      micGainNode = audioCtx.createGain();
-      micGainNode.gain.setValueAtTime(isMicEnabled ? 1.0 : 0.0, audioCtx.currentTime);
-      micGainNode.connect(audioDestNode);
-    }
-
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-
-    // Connect all scene audio/video elements into the WebAudio mixer
-    mediaElementsMap.forEach((el) => {
-      if ((el.tagName === 'AUDIO' || el.tagName === 'VIDEO') && !connectedMediaNodes.has(el)) {
-        try {
-          const node = audioCtx.createMediaElementSource(el);
-          node.connect(audioDestNode);
-          node.connect(audioCtx.destination);
-          connectedMediaNodes.set(el, node);
-        } catch (_) {}
-      }
-    });
-
-    return audioDestNode.stream.getAudioTracks()[0];
-  }
-
-  studioMicToggle.addEventListener('click', async () => {
-    if (!isMicEnabled) {
-      try {
-        if (!micStream) {
-          micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        }
-        getMixedAudioTrack();
-        const src = audioCtx.createMediaStreamSource(micStream);
-        src.connect(micGainNode);
-        micGainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
-        isMicEnabled = true;
-        studioMicToggle.textContent = '🎙 Browser Mic: ON';
-      } catch (err) {
-        alert('Mic error: ' + err.message);
-      }
-    } else {
-      if (micGainNode && audioCtx) micGainNode.gain.setValueAtTime(0.0, audioCtx.currentTime);
-      isMicEnabled = false;
-      studioMicToggle.textContent = '🎙 Browser Mic: OFF';
-    }
-  });
-
-  // Start / Stop Simultaneous Dual 16:9 + 9:16 Live Stream
-  studioGoLiveBtn.addEventListener('click', async () => {
-    if (!activeInstanceId) return;
-
-    if (!isDualLive) {
-      try {
-        await saveScenesToServer(false);
-        const mixedAudioTrack = getMixedAudioTrack();
-
-        const stream169 = canvas169.captureStream(30);
-        const stream916 = canvas916.captureStream(30);
-
-        if (mixedAudioTrack) {
-          stream169.addTrack(mixedAudioTrack.clone());
-          stream916.addTrack(mixedAudioTrack.clone());
-        }
-
-        const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=h264,opus')
-          ? 'video/webm;codecs=h264,opus'
-          : 'video/webm';
-
-        await fetch(`/api/instances/${activeInstanceId}/start-dual-canvas`, { method: 'POST' });
-
-        recorder169 = new MediaRecorder(stream169, { mimeType, videoBitsPerSecond: 3500000 });
-        recorder916 = new MediaRecorder(stream916, { mimeType, videoBitsPerSecond: 3200000 });
-
-        recorder169.ondataavailable = async (e) => {
-          if (e.data && e.data.size > 0) {
-            socket.emit('binary-chunk-169', {
-              instanceId: activeInstanceId,
-              chunk: await e.data.arrayBuffer()
-            });
-          }
-        };
-
-        recorder916.ondataavailable = async (e) => {
-          if (e.data && e.data.size > 0) {
-            socket.emit('binary-chunk-916', {
-              instanceId: activeInstanceId,
-              chunk: await e.data.arrayBuffer()
-            });
-          }
-        };
-
-        recorder169.start(400);
-        recorder916.start(400);
-        isDualLive = true;
-        studioGoLiveText.textContent = '⏹ STOP DUAL LIVE (16:9 + 9:16)';
-      } catch (err) {
-        alert('Could not start Dual Live: ' + err.message);
-      }
-    } else {
-      if (recorder169 && recorder169.state !== 'inactive') recorder169.stop();
-      if (recorder916 && recorder916.state !== 'inactive') recorder916.stop();
-      isDualLive = false;
-      studioGoLiveText.textContent = '🚀 START DUAL LIVE (16:9 + 9:16 SIMULTANEOUS)';
-      await fetch(`/api/instances/${activeInstanceId}/stop`, { method: 'POST' });
-    }
-  });
-
-  function syncStudioLiveButton(inst) {
-    if (inst && inst.status === 'live') {
-      isDualLive = true;
-      studioGoLiveText.textContent = '⏹ STOP DUAL LIVE (16:9 + 9:16)';
-    } else {
-      isDualLive = false;
-      studioGoLiveText.textContent = '🚀 START DUAL LIVE (16:9 + 9:16 SIMULTANEOUS)';
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // 11. Dashboard Cards & Quick Live Scene Switcher
-  // ---------------------------------------------------------------------------
-  socket.on('instances-update', (list) => {
-    instancesData = list || [];
-    if (activeStreamsCounter) {
-      activeStreamsCounter.textContent = instancesData.filter((i) => i.status === 'live').length;
-    }
-    const currInst = instancesData.find((i) => i.id === activeInstanceId);
-    if (currInst) updateObsSignalUI(currInst);
-    renderInstancesGrid();
-  });
-
-  function renderInstancesGrid() {
-    if (!instancesGrid) return;
-    instancesGrid.innerHTML = '';
-
-    instancesData.forEach((inst) => {
-      const card = document.createElement('div');
-      card.className = 'instance-card';
-
-      const isLive = inst.status === 'live';
-      const rtmpIngest = `rtmp://${currentHost}:1935/live`;
-      const preview169Url = `/api/flv-proxy/${inst.streamKey}_169_preview.flv`;
-      const preview916Url = `/api/flv-proxy/${inst.streamKey}_916_preview.flv`;
-
-      const sceneButtonsHtml = (inst.scenes || [])
-        .map((sc) => {
-          const activeCls = sc.id === inst.activeSceneId ? 'active' : '';
-          const icon = sc.type === 'default' ? '🟢' : sc.type === 'color-detect' ? '🎨' : '📡';
-          return `<button class="scene-mini-pill ${activeCls}" onclick="window.quickSwitchScene('${inst.id}', '${sc.id}')">${icon} ${escapeHtml(sc.name)}</button>`;
-        })
-        .join('');
-
-      card.innerHTML = `
-        <div class="card-header-row">
-          <div>
-            <h3 class="card-inst-name">☁️ ${escapeHtml(inst.name)}</h3>
-            <div class="card-tags">
-              <span class="tag tag-dual">📺 16:9 + 📱 9:16 Dual Live</span>
-              <span class="tag tag-pink">${inst.mode === 'playlist-loop' ? '🔁 24/7 Playlist' : '🖥️ Window + Voiceover Auto'}</span>
-            </div>
-          </div>
-          <div class="status-pill ${isLive ? 'status-live' : 'status-offline'}">
-            <span>${isLive ? '🟢 DUAL LIVE' : '⚪ OFFLINE'}</span>
-          </div>
-        </div>
-
-        <div class="ingest-box">
-          <div class="ingest-box-header">
-            <span>🖥️ SEND WINDOW + VOICEOVER FROM OBS TO:</span>
-            <span>${inst.isPublishing ? '🟢 OBS CONNECTED' : '🟠 WAITING FOR OBS'}</span>
-          </div>
-          <div class="field-value-row">
-            <span class="field-value">Server: ${rtmpIngest}</span>
-            <button class="btn btn-xs btn-sky-soft" onclick="navigator.clipboard.writeText('${rtmpIngest}');alert('Copied RTMP Server URL!');">Copy</button>
-          </div>
-          <div class="field-value-row">
-            <span class="field-value">Stream Key: ${inst.streamKey}</span>
-            <button class="btn btn-xs btn-sky-soft" onclick="navigator.clipboard.writeText('${inst.streamKey}');alert('Copied Stream Key!');">Copy</button>
-          </div>
-        </div>
-
-        <!-- Live Scene Switcher right on the Card -->
-        <div class="card-scenes-strip">
-          <div class="strip-label">
-            <span>🎬 Live Scenes (Click to Switch 16:9 & 9:16 Together):</span>
-            <span>${inst.autoSceneSwitch ? '🤖 Auto-Color: ON' : 'Manual'}</span>
-          </div>
-          <div class="scene-pills-wrap">${sceneButtonsHtml}</div>
-        </div>
-
-        <div class="card-actions-grid">
-          ${
-            !isLive
-              ? `<button class="btn btn-sakura btn-sm" onclick="window.startPlayout('${inst.id}')">🚀 Start Dual Live (16:9 + 9:16)</button>`
-              : `<button class="btn btn-danger-soft btn-sm" onclick="window.stopPlayout('${inst.id}')">⏹ Stop Dual Broadcast</button>`
-          }
-          <button class="btn btn-sky btn-sm" onclick="window.openStudioById('${inst.id}')">🎨 Dual 16:9 & 9:16 Scene Studio</button>
-        </div>
-
-        <div class="card-actions-row">
-          <button class="btn btn-xs btn-sky-soft" style="flex:1;" onclick="window.openPreviewPlayer('${preview169Url}', '16:9 Monitor')">👁 16:9 Monitor</button>
-          <button class="btn btn-xs btn-sky-soft" style="flex:1;" onclick="window.openPreviewPlayer('${preview916Url}', '9:16 Shorts Monitor')">👁 9:16 Monitor</button>
-          <button class="btn btn-xs btn-sky-soft" onclick="window.editInstance('${inst.id}')">⚙ Keys</button>
-          <button class="btn btn-xs btn-danger-soft" onclick="window.deleteInstance('${inst.id}')">🗑</button>
-        </div>
-      `;
-
-      instancesGrid.appendChild(card);
-    });
-  }
-
-  window.quickSwitchScene = async function (instId, sceneId) {
-    await fetch(`/api/instances/${instId}/switch-scene`, {
-      method: 'POST',
+async function persistStudioInstance() {
+  const inst = getStudioInstance();
+  if (!inst) return;
+  syncStudioUI();
+  try {
+    await fetch(`/api/instances/${inst.id}`, {
+      method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sceneId, reason: 'DASHBOARD QUICK SWITCH' })
+      body: JSON.stringify(inst)
     });
-  };
+  } catch (_) {}
+}
 
-  window.startPlayout = async function (id) {
-    await fetch(`/api/instances/${id}/start`, { method: 'POST' });
-  };
+document.getElementById('studioSaveLayoutBtn')?.addEventListener('click', () => {
+  persistStudioInstance();
+  showToast('💾 Saved all scenes & dual 16:9 + 9:16 coordinates!', 'success');
+});
 
-  window.stopPlayout = async function (id) {
-    await fetch(`/api/instances/${id}/stop`, { method: 'POST' });
-  };
-
-  window.openStudioById = function (id) {
-    const inst = instancesData.find((i) => i.id === id);
-    if (inst) openDualStudio(inst);
-  };
-
-  window.deleteInstance = async function (id) {
-    if (confirm('Delete this dual stream instance?')) {
-      await fetch(`/api/instances/${id}`, { method: 'DELETE' });
-    }
-  };
-
-  // Create / Edit Instance Modal
-  const instanceModal = document.getElementById('instanceModal');
-  const instFormId = document.getElementById('instFormId');
-  const instFormName = document.getElementById('instFormName');
-  const instFormMode = document.getElementById('instFormMode');
-  const instForm169Primary = document.getElementById('instForm169Primary');
-  const instForm169Backup = document.getElementById('instForm169Backup');
-  const instForm916Primary = document.getElementById('instForm916Primary');
-  const instForm916Backup = document.getElementById('instForm916Backup');
-  const playlistGroup = document.getElementById('playlistGroup');
-  const urlListContainer = document.getElementById('urlListContainer');
-
-  document.getElementById('btnCreateInstanceModal').addEventListener('click', () => {
-    instFormId.value = '';
-    instFormName.value = '';
-    instFormMode.value = 'window-voiceover-dual';
-    instForm169Primary.value = '';
-    instForm169Backup.value = '';
-    instForm916Primary.value = '';
-    instForm916Backup.value = '';
-    urlListContainer.innerHTML = '';
-    playlistGroup.style.display = 'none';
-    instanceModal.style.display = 'flex';
-  });
-
-  window.editInstance = function (id) {
-    const inst = instancesData.find((i) => i.id === id);
-    if (!inst) return;
-    instFormId.value = inst.id;
-    instFormName.value = inst.name;
-    instFormMode.value = inst.mode || 'window-voiceover-dual';
-    instForm169Primary.value = inst.rtmp169Primary || '';
-    instForm169Backup.value = inst.rtmp169Backup || '';
-    instForm916Primary.value = inst.rtmp916Primary || '';
-    instForm916Backup.value = inst.rtmp916Backup || '';
-    playlistGroup.style.display = inst.mode === 'playlist-loop' ? 'flex' : 'none';
-    urlListContainer.innerHTML = '';
-    (inst.playlistUrls || []).forEach((u) => addUrlRow(u));
-    instanceModal.style.display = 'flex';
-  };
-
-  instFormMode.addEventListener('change', (e) => {
-    playlistGroup.style.display = e.target.value === 'playlist-loop' ? 'flex' : 'none';
-  });
-
-  function addUrlRow(val = '') {
-    const div = document.createElement('div');
-    div.style.display = 'flex';
-    div.style.gap = '6px';
-    div.style.marginTop = '6px';
-    div.innerHTML = `
-      <input type="text" class="sky-input playlist-url-inp" value="${escapeHtml(val)}" placeholder="https://example.com/video.mp4 or /uploads/video.mp4">
-      <button type="button" class="btn btn-xs btn-danger-soft">&times;</button>
-    `;
-    div.querySelector('button').addEventListener('click', () => div.remove());
-    urlListContainer.appendChild(div);
+function ensureAudioMixer() {
+  if (!audioCtx) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    audioCtx = new AudioContextClass();
+    audioDest = audioCtx.createMediaStreamDestination();
   }
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(() => {});
+  }
+}
 
-  document.getElementById('btnAddUrlRow').addEventListener('click', () => addUrlRow());
-  document.getElementById('btnCloseInstanceModal').addEventListener('click', () => (instanceModal.style.display = 'none'));
-  document.getElementById('btnCancelInstanceModal').addEventListener('click', () => (instanceModal.style.display = 'none'));
+function connectElementToAudioMixer(el) {
+  if (!el || connectedAudioNodes.has(el)) return;
+  try {
+    ensureAudioMixer();
+    const node = audioCtx.createMediaElementSource(el);
+    const gain = audioCtx.createGain();
+    node.connect(gain);
+    gain.connect(audioDest);
+    gain.connect(audioCtx.destination);
+    el._gainNode = gain;
+    connectedAudioNodes.add(el);
+  } catch (_) {}
+}
 
-  document.getElementById('btnSaveInstance').addEventListener('click', async () => {
-    const id = instFormId.value;
-    const playlistUrls = [];
-    document.querySelectorAll('.playlist-url-inp').forEach((inp) => {
-      if (inp.value.trim()) playlistUrls.push(inp.value.trim());
+function syncHiddenMediaElements(inst) {
+  const pool = document.getElementById('hiddenMediaPool');
+  if (!pool || !inst) return;
+
+  const activeScene = inst.scenes.find((s) => s.id === inst.activeSceneId) || inst.scenes[0];
+  if (!activeScene) return;
+
+  activeScene.sources.forEach((src) => {
+    if (!src.url) return;
+    let el = mediaCache.get(src.id);
+
+    if (src.type === 'image') {
+      if (!el || el.tagName !== 'IMG' || el.dataset.srcUrl !== src.url) {
+        el = new Image();
+        el.crossOrigin = 'anonymous';
+        el.src = src.url;
+        el.dataset.srcUrl = src.url;
+        mediaCache.set(src.id, el);
+      }
+    } else if (src.type === 'video' || src.type === 'audio') {
+      const tag = src.type === 'video' ? 'VIDEO' : 'AUDIO';
+      if (!el || el.tagName !== tag || el.dataset.srcUrl !== src.url) {
+        if (el && el.remove) el.remove();
+        el = document.createElement(tag.toLowerCase());
+        el.crossOrigin = 'anonymous';
+        el.src = src.url;
+        el.dataset.srcUrl = src.url;
+        el.loop = src.loop !== false;
+        el.playsInline = true;
+        pool.appendChild(el);
+        mediaCache.set(src.id, el);
+      }
+      el.loop = src.loop !== false;
+      const vol = src.muted || src.visible === false ? 0 : (src.volume ?? 1);
+      el.volume = Math.max(0, Math.min(1, vol));
+      if (el._gainNode) el._gainNode.gain.value = el.volume;
+      if (el.paused && src.visible !== false) {
+        el.play().catch(() => {});
+      }
+    }
+  });
+}
+
+document.getElementById('studioShareWindowBtn')?.addEventListener('click', async () => {
+  try {
+    ensureAudioMixer();
+    const displayStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { width: 1280, height: 720, frameRate: 30 },
+      audio: true
     });
 
-    const payload = {
-      name: instFormName.value.trim() || 'Dual Sky Stream',
-      mode: instFormMode.value,
-      rtmp169Primary: instForm169Primary.value.trim(),
-      rtmp169Backup: instForm169Backup.value.trim(),
-      rtmp916Primary: instForm916Primary.value.trim(),
-      rtmp916Backup: instForm916Backup.value.trim(),
-      playlistUrls
+    let micStream = null;
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    } catch (_) {}
+
+    if (displayStream.getAudioTracks().length > 0) {
+      const sysSrc = audioCtx.createMediaStreamSource(displayStream);
+      sysSrc.connect(audioDest);
+    }
+    if (micStream && micStream.getAudioTracks().length > 0) {
+      const micSrc = audioCtx.createMediaStreamSource(micStream);
+      micSrc.connect(audioDest);
+    }
+
+    localCaptureStream = displayStream;
+    if (!localCaptureVideoEl) {
+      localCaptureVideoEl = document.createElement('video');
+      localCaptureVideoEl.muted = true;
+      localCaptureVideoEl.playsInline = true;
+    }
+    localCaptureVideoEl.srcObject = displayStream;
+    await localCaptureVideoEl.play();
+
+    displayStream.getVideoTracks()[0].onended = () => {
+      localCaptureStream = null;
+      syncStudioUI();
     };
 
-    if (id) {
-      await fetch(`/api/instances/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-    } else {
-      await fetch('/api/instances', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+    syncStudioUI();
+    showToast('🖥️ Direct Window + Voiceover connected to Dual Studio!', 'success');
+  } catch (err) {
+    showToast(`Window capture cancelled: ${err.message}`, 'error');
+  }
+});
+
+let currentFlvKey = null;
+function ensureFlvIngestPreview(inst) {
+  if (!inst || !inst.obsConnected) {
+    if (flvPlayer) {
+      try {
+        flvPlayer.destroy();
+      } catch (_) {}
+      flvPlayer = null;
+      currentFlvKey = null;
     }
-    instanceModal.style.display = 'none';
-  });
-
-  // ---------------------------------------------------------------------------
-  // 12. Preview Monitor, Live Logs & System Health
-  // ---------------------------------------------------------------------------
-  const previewModal = document.getElementById('previewModal');
-  const flvPreviewPlayer = document.getElementById('flvPreviewPlayer');
-  let monitorPlayer = null;
-  let lastPreviewUrl = '';
-
-  window.openPreviewPlayer = function (url, title) {
-    lastPreviewUrl = url;
-    document.getElementById('previewTitle').textContent = `👁 ${title || 'Live Monitor'}`;
-    document.getElementById('previewStatusText').textContent = `Playing: ${url}`;
-    previewModal.style.display = 'flex';
-
-    if (flvjs.isSupported()) {
-      if (monitorPlayer) monitorPlayer.destroy();
-      monitorPlayer = flvjs.createPlayer({ type: 'flv', isLive: true, url });
-      monitorPlayer.attachMediaElement(flvPreviewPlayer);
-      monitorPlayer.load();
-      monitorPlayer.play().catch(() => {});
-    }
-  };
-
-  document.getElementById('btnClosePreviewModal').addEventListener('click', () => {
-    if (monitorPlayer) {
-      monitorPlayer.destroy();
-      monitorPlayer = null;
-    }
-    previewModal.style.display = 'none';
-  });
-
-  document.getElementById('btnReloadPreview').addEventListener('click', () => {
-    if (lastPreviewUrl) window.openPreviewPlayer(lastPreviewUrl);
-  });
-
-  // Logs Engine
-  const terminalLines = document.getElementById('terminalLines');
-  const logsTerminal = document.getElementById('logsTerminal');
-
-  function renderLogs() {
-    if (!terminalLines) return;
-    terminalLines.innerHTML = '';
-    logsList.forEach((entry) => {
-      if (currentLogLevel !== 'ALL' && entry.level !== currentLogLevel) return;
-      if (logSearchQuery && !entry.message.toLowerCase().includes(logSearchQuery)) return;
-      const div = document.createElement('div');
-      div.className = 'log-line';
-      const time = entry.timestamp ? entry.timestamp.split('T')[1].replace('Z', '') : '';
-      div.innerHTML = `
-        <span class="log-timestamp">${time}</span>
-        <span class="log-badge log-badge-${entry.level}">${entry.level}</span>
-        <span class="log-source">[${entry.source}]</span>
-        <span class="log-msg">${escapeHtml(entry.message)}</span>
-      `;
-      terminalLines.appendChild(div);
-    });
-    if (autoScrollLogs && logsTerminal) logsTerminal.scrollTop = logsTerminal.scrollHeight;
+    return;
   }
 
-  socket.on('logs:history', (h) => {
-    logsList = h || [];
-    renderLogs();
-  });
-  socket.on('log:entry', (e) => {
-    logsList.push(e);
-    if (logsList.length > 600) logsList.shift();
-    renderLogs();
-  });
-  socket.on('logs:cleared', () => {
-    logsList = [];
-    renderLogs();
-  });
+  if (currentFlvKey === inst.rtmpIngestKey && flvPlayer) return;
+  if (!window.mpegts || !mpegts.isSupported()) return;
 
-  document.getElementById('logLevelSelect').addEventListener('change', (e) => {
-    currentLogLevel = e.target.value;
-    renderLogs();
-  });
-  document.getElementById('logSearchInput').addEventListener('input', (e) => {
-    logSearchQuery = e.target.value.trim().toLowerCase();
-    renderLogs();
-  });
-  document.getElementById('btnToggleAutoScroll').addEventListener('click', () => {
-    autoScrollLogs = !autoScrollLogs;
-    document.getElementById('autoScrollStatus').textContent = `Auto-Scroll: ${autoScrollLogs ? 'ON' : 'OFF'}`;
-  });
-  document.getElementById('btnCopyLogs').addEventListener('click', () => {
-    const txt = logsList.map((l) => `${l.timestamp} [${l.level}] ${l.message}`).join('\n');
-    navigator.clipboard.writeText(txt).then(() => alert('Logs copied!'));
-  });
-  document.getElementById('btnDownloadLogs').addEventListener('click', () => {
-    const txt = logsList.map((l) => `${l.timestamp} [${l.level}] ${l.message}`).join('\n');
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([txt], { type: 'text/plain' }));
-    a.download = `free-live-24-7-by-sletoyt-logs.log`;
-    a.click();
-  });
-  document.getElementById('btnClearLogs').addEventListener('click', () => {
-    fetch('/api/logs/clear', { method: 'POST' });
-  });
-
-  async function fetchSystemStatus() {
+  if (flvPlayer) {
     try {
-      const res = await fetch('/api/system/status');
-      const d = await res.json();
-      document.getElementById('sysPlatform').textContent = d.platform;
-      document.getElementById('sysNodeVer').textContent = d.nodeVersion;
-      document.getElementById('sysHeapUsed').textContent = d.memory.heapUsedMb;
-      document.getElementById('sysRss').textContent = d.memory.rssMb;
-      document.getElementById('sysTotalRam').textContent = d.memory.sysTotalMb;
-      document.getElementById('sysActivePlayouts').textContent = d.activePlayouts;
-      document.getElementById('sysStoredFiles').textContent = d.storedFilesCount || 0;
-      document.getElementById('sysUptime').textContent = `${Math.floor(d.uptimeSeconds / 3600)}h ${Math.floor((d.uptimeSeconds % 3600) / 60)}m`;
-      document.getElementById('sysSystemUptime').textContent = `${Math.floor(d.systemUptime / 3600)}h ${Math.floor((d.systemUptime % 3600) / 60)}m`;
+      flvPlayer.destroy();
     } catch (_) {}
   }
 
-  function escapeHtml(str) {
-    const d = document.createElement('div');
-    d.textContent = str || '';
-    return d.innerHTML;
+  if (!flvVideoEl) {
+    flvVideoEl = document.createElement('video');
+    flvVideoEl.crossOrigin = 'anonymous';
+    flvVideoEl.muted = true;
+    flvVideoEl.playsInline = true;
+    flvVideoEl.autoplay = true;
   }
 
-  // Initial Load
-  fetch('/api/instances').then((r) => r.json()).then((d) => {
-    instancesData = d || [];
-    renderInstancesGrid();
+  currentFlvKey = inst.rtmpIngestKey;
+  flvPlayer = mpegts.createPlayer({
+    type: 'flv',
+    isLive: true,
+    url: `/api/flv-proxy/${encodeURIComponent(inst.rtmpIngestKey)}`
   });
-  fetchCloudFiles();
-  fetchSystemStatus();
-})();
+  flvPlayer.attachMediaElement(flvVideoEl);
+  flvPlayer.load();
+  flvPlayer.play().catch(() => {});
+}
+
+function getActiveIncomingVideoElement() {
+  if (localCaptureStream && localCaptureVideoEl && localCaptureVideoEl.readyState >= 2) {
+    return localCaptureVideoEl;
+  }
+  if (flvVideoEl && flvVideoEl.readyState >= 2) {
+    return flvVideoEl;
+  }
+  return null;
+}
+
+function sampleCurrentFeedHex() {
+  const feedEl = getActiveIncomingVideoElement();
+  if (!feedEl) return null;
+  try {
+    samplerCtx.drawImage(feedEl, 0, 0, 12, 12);
+    const data = samplerCtx.getImageData(0, 0, 12, 12).data;
+    let r = 0, g = 0, b = 0, count = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      r += data[i];
+      g += data[i + 1];
+      b += data[i + 2];
+      count++;
+    }
+    r = Math.round(r / count);
+    g = Math.round(g / count);
+    b = Math.round(b / count);
+    const toHex = (n) => n.toString(16).padStart(2, '0');
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  } catch (_) {
+    return null;
+  }
+}
+
+setInterval(() => {
+  const inst = getStudioInstance();
+  if (!inst || !localCaptureStream) return;
+  const feedEl = localCaptureVideoEl;
+  if (!feedEl || feedEl.readyState < 2) return;
+
+  try {
+    samplerCtx.drawImage(feedEl, 0, 0, 12, 12);
+    const data = samplerCtx.getImageData(0, 0, 12, 12).data;
+    let sumR = 0, sumG = 0, sumB = 0;
+    const total = 144;
+    for (let i = 0; i < data.length; i += 4) {
+      sumR += data[i];
+      sumG += data[i + 1];
+      sumB += data[i + 2];
+    }
+    const avg = { r: Math.round(sumR / total), g: Math.round(sumG / total), b: Math.round(sumB / total) };
+    let uniform = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const dr = data[i] - avg.r;
+      const dg = data[i + 1] - avg.g;
+      const db = data[i + 2] - avg.b;
+      if (Math.sqrt(dr * dr + dg * dg + db * db) <= 35) uniform++;
+    }
+    const ratio = uniform / total;
+    const toHex = (n) => n.toString(16).padStart(2, '0');
+    const hex = `#${toHex(avg.r)}${toHex(avg.g)}${toHex(avg.b)}`;
+
+    const swatch = document.getElementById('studioDetectedSwatch');
+    const txt = document.getElementById('studioDetectedHexText');
+    if (swatch) swatch.style.background = hex;
+    if (txt) txt.textContent = `Screen: ${hex} (${Math.round(ratio * 100)}%)`;
+
+    if (!inst.autoSceneSwitch) return;
+
+    const colorScenes = inst.scenes.filter((s) => s.type === 'color-detect');
+    const defaultScene = inst.scenes.find((s) => s.type === 'default') || inst.scenes[0];
+
+    if (ratio >= 0.80) {
+      for (const cScene of colorScenes) {
+        const clean = (cScene.triggerColor || '#000000').replace('#', '');
+        const num = parseInt(clean, 16);
+        const tr = (num >> 16) & 255;
+        const tg = (num >> 8) & 255;
+        const tb = num & 255;
+        const dist = Math.sqrt((avg.r - tr) ** 2 + (avg.g - tg) ** 2 + (avg.b - tb) ** 2);
+        if (dist <= (cScene.colorTolerance || 32) * 1.8) {
+          if (inst.activeSceneId !== cScene.id) {
+            selectedSceneId = cScene.id;
+            socket.emit('client-color-switch', {
+              instanceId: inst.id,
+              targetSceneId: cScene.id,
+              reason: `Screen Color Match (${hex})`
+            });
+          }
+          return;
+        }
+      }
+    }
+
+    const activeScene = inst.scenes.find((s) => s.id === inst.activeSceneId);
+    if (activeScene && activeScene.type === 'color-detect' && defaultScene) {
+      selectedSceneId = defaultScene.id;
+      socket.emit('client-color-switch', {
+        instanceId: inst.id,
+        targetSceneId: defaultScene.id,
+        reason: `Color Cleared (${hex}) -> Default Scene`
+      });
+    }
+  } catch (_) {}
+}, 900);
+
+function drawSceneOnCanvas(ctx, canvasW, canvasH, ratioKey, inst, scene) {
+  ctx.fillStyle = scene?.bgColor || '#0f172a';
+  ctx.fillRect(0, 0, canvasW, canvasH);
+
+  ctx.strokeStyle = 'rgba(56, 189, 248, 0.12)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(12, 12, canvasW - 24, canvasH - 24);
+
+  if (!scene || !Array.isArray(scene.sources)) return;
+
+  const is916 = ratioKey === '916';
+
+  scene.sources.forEach((src) => {
+    if (src.visible === false) return;
+    const rect = is916
+      ? src.rect916 || { x: 60, y: 400, w: 960, h: 540 }
+      : src.rect169 || { x: 0, y: 0, w: 1920, h: 1080 };
+
+    if (src.type === 'live-window') {
+      const feedEl = getActiveIncomingVideoElement();
+      if (feedEl) {
+        ctx.drawImage(feedEl, rect.x, rect.y, rect.w, rect.h);
+      } else {
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+        ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+        ctx.fillStyle = '#38bdf8';
+        ctx.font = 'bold 34px "Fredoka", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('🖥️ INCOMING WINDOW + VOICEOVER', rect.x + rect.w / 2, rect.y + rect.h / 2 - 12);
+        ctx.fillStyle = '#f472b6';
+        ctx.font = '600 22px "Plus Jakarta Sans", sans-serif';
+        ctx.fillText(`Stream from OBS (Key: ${inst.rtmpIngestKey}) or click "Capture Window + Mic"`, rect.x + rect.w / 2, rect.y + rect.h / 2 + 28);
+      }
+    } else if (src.type === 'video' || src.type === 'image') {
+      const el = mediaCache.get(src.id);
+      if (el) {
+        try {
+          ctx.drawImage(el, rect.x, rect.y, rect.w, rect.h);
+        } catch (_) {}
+      }
+    } else if (src.type === 'text') {
+      ctx.save();
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.82)';
+      ctx.beginPath();
+      ctx.roundRect(rect.x, rect.y, rect.w, rect.h, 24);
+      ctx.fill();
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = src.color || '#38bdf8';
+      ctx.stroke();
+
+      ctx.fillStyle = src.color || '#38bdf8';
+      const fontSize = Math.max(24, Math.min(72, Math.round(rect.h * 0.42)));
+      ctx.font = `700 ${fontSize}px "Fredoka", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(src.text || src.name, rect.x + rect.w / 2, rect.y + rect.h / 2);
+      ctx.restore();
+    }
+
+    if (src.id === selectedSourceId && src.type !== 'audio') {
+      ctx.save();
+      ctx.strokeStyle = is916 ? '#f472b6' : '#38bdf8';
+      ctx.lineWidth = 5;
+      ctx.setLineDash([12, 8]);
+      ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = is916 ? '#f472b6' : '#38bdf8';
+      ctx.fillRect(rect.x + rect.w - 28, rect.y + rect.h - 28, 28, 28);
+      ctx.restore();
+    }
+  });
+}
+
+setInterval(() => {
+  if (activeTab !== 'studio' && !isBrowserDualLive) return;
+  const inst = getStudioInstance();
+  if (!inst) return;
+  const scene = getSelectedScene(inst);
+  drawSceneOnCanvas(ctx169, 1920, 1080, '169', inst, scene);
+  drawSceneOnCanvas(ctx916, 1080, 1920, '916', inst, scene);
+}, 40);
+
+function attachCanvasDragInteraction(canvasEl, ratioKey, logicalW, logicalH) {
+  let dragMode = null;
+  let startMouse = { x: 0, y: 0 };
+  let startRect = { x: 0, y: 0, w: 0, h: 0 };
+
+  function toLogicalCoords(e) {
+    const bounds = canvasEl.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    return {
+      x: ((clientX - bounds.left) / bounds.width) * logicalW,
+      y: ((clientY - bounds.top) / bounds.height) * logicalH
+    };
+  }
+
+  function onPointerDown(e) {
+    const inst = getStudioInstance();
+    const sc = getSelectedScene(inst);
+    if (!sc) return;
+
+    const pt = toLogicalCoords(e);
+    const rectProp = ratioKey === '916' ? 'rect916' : 'rect169';
+
+    for (let i = sc.sources.length - 1; i >= 0; i--) {
+      const src = sc.sources[i];
+      if (src.visible === false || src.type === 'audio') continue;
+      const r = src[rectProp];
+      if (!r) continue;
+
+      if (pt.x >= r.x + r.w - 42 && pt.x <= r.x + r.w + 12 && pt.y >= r.y + r.h - 42 && pt.y <= r.y + r.h + 12) {
+        selectedSourceId = src.id;
+        dragMode = 'resize';
+        startMouse = pt;
+        startRect = { ...r };
+        renderSourcesList(inst);
+        renderSourceInspector(inst);
+        e.preventDefault();
+        return;
+      }
+
+      if (pt.x >= r.x && pt.x <= r.x + r.w && pt.y >= r.y && pt.y <= r.y + r.h) {
+        selectedSourceId = src.id;
+        dragMode = 'move';
+        startMouse = pt;
+        startRect = { ...r };
+        renderSourcesList(inst);
+        renderSourceInspector(inst);
+        e.preventDefault();
+        return;
+      }
+    }
+  }
+
+  function onPointerMove(e) {
+    if (!dragMode) return;
+    const inst = getStudioInstance();
+    const src = getSelectedSource(inst);
+    if (!src) return;
+
+    const pt = toLogicalCoords(e);
+    const dx = pt.x - startMouse.x;
+    const dy = pt.y - startMouse.y;
+    const rectProp = ratioKey === '916' ? 'rect916' : 'rect169';
+
+    if (dragMode === 'move') {
+      src[rectProp].x = Math.round(startRect.x + dx);
+      src[rectProp].y = Math.round(startRect.y + dy);
+    } else if (dragMode === 'resize') {
+      src[rectProp].w = Math.max(60, Math.round(startRect.w + dx));
+      src[rectProp].h = Math.max(40, Math.round(startRect.h + dy));
+    }
+
+    renderSourceInspector(inst);
+  }
+
+  function onPointerUp() {
+    if (dragMode) {
+      dragMode = null;
+      persistStudioInstance();
+    }
+  }
+
+  canvasEl.addEventListener('mousedown', onPointerDown);
+  window.addEventListener('mousemove', onPointerMove);
+  window.addEventListener('mouseup', onPointerUp);
+
+  canvasEl.addEventListener('touchstart', onPointerDown, { passive: false });
+  window.addEventListener('touchmove', onPointerMove, { passive: false });
+  window.addEventListener('touchend', onPointerUp);
+}
+
+attachCanvasDragInteraction(canvas169, '169', 1920, 1080);
+attachCanvasDragInteraction(canvas916, '916', 1080, 1920);
+
+document.getElementById('studioGoLiveDualBtn')?.addEventListener('click', async () => {
+  const inst = getStudioInstance();
+  if (!inst) return;
+
+  if (!inst.streamKey169 && !inst.streamKey916) {
+    showToast('Please enter at least one Stream Key (16:9 or 9:16) first!', 'error');
+    openEditInstanceModal(inst.id);
+    return;
+  }
+
+  try {
+    await persistStudioInstance();
+    ensureAudioMixer();
+
+    const activeScene = getSelectedScene(inst);
+    activeScene?.sources.forEach((src) => {
+      const el = mediaCache.get(src.id);
+      if (el && (src.type === 'video' || src.type === 'audio')) {
+        connectElementToAudioMixer(el);
+        el.play().catch(() => {});
+      }
+    });
+
+    const res = await fetch(`/api/instances/${inst.id}/start-dual-canvas`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Could not start dual live');
+
+    const fps = Number(inst.fps) || 30;
+    const mime = MediaRecorder.isTypeSupported('video/webm;codecs=h264,opus')
+      ? 'video/webm;codecs=h264,opus'
+      : 'video/webm';
+
+    if (inst.enable169 && inst.streamKey169) {
+      const stream169 = canvas169.captureStream(fps);
+      if (audioDest && audioDest.stream.getAudioTracks().length > 0) {
+        stream169.addTrack(audioDest.stream.getAudioTracks()[0].clone());
+      }
+      recorder169 = new MediaRecorder(stream169, { mimeType: mime, videoBitsPerSecond: (inst.bitrate || 2200) * 1000 });
+      recorder169.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          socket.emit('binary-chunk-169', { instanceId: inst.id, chunk: e.data });
+        }
+      };
+      recorder169.start(400);
+    }
+
+    if (inst.enable916 && inst.streamKey916) {
+      const stream916 = canvas916.captureStream(fps);
+      if (audioDest && audioDest.stream.getAudioTracks().length > 0) {
+        stream916.addTrack(audioDest.stream.getAudioTracks()[0].clone());
+      }
+      recorder916 = new MediaRecorder(stream916, { mimeType: mime, videoBitsPerSecond: (inst.bitrate || 2200) * 1000 });
+      recorder916.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          socket.emit('binary-chunk-916', { instanceId: inst.id, chunk: e.data });
+        }
+      };
+      recorder916.start(400);
+    }
+
+    isBrowserDualLive = true;
+    showToast('🚀 LIVE ON AIR: Streaming both 16:9 and 9:16 simultaneously!', 'success');
+    syncStudioUI();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+});
+
+function stopBrowserDualStreaming() {
+  if (recorder169 && recorder169.state !== 'inactive') {
+    try { recorder169.stop(); } catch (_) {}
+  }
+  if (recorder916 && recorder916.state !== 'inactive') {
+    try { recorder916.stop(); } catch (_) {}
+  }
+  recorder169 = null;
+  recorder916 = null;
+  isBrowserDualLive = false;
+}
+
+document.getElementById('studioStopLiveBtn')?.addEventListener('click', () => {
+  const inst = getStudioInstance();
+  if (!inst) return;
+  window.stopChannelPlayout(inst.id);
+});
+
+document.querySelectorAll('.log-pill').forEach((pill) => {
+  pill.addEventListener('click', () => {
+    document.querySelectorAll('.log-pill').forEach((p) => p.classList.remove('active'));
+    pill.classList.add('active');
+    currentLogLevel = pill.dataset.level;
+    renderLogsTerminal();
+  });
+});
+
+document.getElementById('logSearchInput')?.addEventListener('input', () => renderLogsTerminal());
+
+document.getElementById('clearLogsBtn')?.addEventListener('click', async () => {
+  await fetch('/api/logs/clear', { method: 'POST' });
+});
+
+function renderLogsTerminal() {
+  const term = document.getElementById('logsTerminalOutput');
+  if (!term) return;
+
+  const query = (document.getElementById('logSearchInput')?.value || '').trim().toLowerCase();
+  const filtered = logsList.filter((l) => {
+    if (currentLogLevel !== 'all' && l.level !== currentLogLevel) return false;
+    if (query && !l.message.toLowerCase().includes(query) && !l.source.toLowerCase().includes(query)) return false;
+    return true;
+  });
+
+  term.innerHTML = filtered
+    .map(
+      (l) => `
+      <div class="log-line">
+        <span class="log-time">${new Date(l.timestamp).toLocaleTimeString()}</span>
+        <span class="log-badge log-${l.level}">${l.level}</span>
+        <span>[${escapeHtml(l.source)}] ${escapeHtml(l.message)}</span>
+      </div>
+    `
+    )
+    .join('');
+
+  if (document.getElementById('logAutoScrollCheck')?.checked) {
+    term.scrollTop = term.scrollHeight;
+  }
+}
+
+function appendSingleLogLine(l) {
+  const term = document.getElementById('logsTerminalOutput');
+  if (!term) return;
+  if (currentLogLevel !== 'all' && l.level !== currentLogLevel) return;
+  const query = (document.getElementById('logSearchInput')?.value || '').trim().toLowerCase();
+  if (query && !l.message.toLowerCase().includes(query)) return;
+
+  const div = document.createElement('div');
+  div.className = 'log-line';
+  div.innerHTML = `
+    <span class="log-time">${new Date(l.timestamp).toLocaleTimeString()}</span>
+    <span class="log-badge log-${l.level}">${l.level}</span>
+    <span>[${escapeHtml(l.source)}] ${escapeHtml(l.message)}</span>
+  `;
+  term.appendChild(div);
+  if (document.getElementById('logAutoScrollCheck')?.checked) {
+    term.scrollTop = term.scrollHeight;
+  }
+}
+
+async function fetchSystemHealth() {
+  try {
+    const res = await fetch('/api/system/status');
+    const data = await res.json();
+    document.getElementById('sysPlatformText').textContent = data.platform;
+    document.getElementById('sysNodeText').textContent = `Node ${data.nodeVersion} • ${data.cpus} CPU Cores`;
+    document.getElementById('sysMemoryText').textContent = `${data.memory.rssMb} MB App / ${data.memory.sysTotalMb} MB Total`;
+    const pct = Math.min(100, Math.round(((data.memory.sysTotalMb - data.memory.sysFreeMb) / data.memory.sysTotalMb) * 100));
+    document.getElementById('sysMemBar').style.width = `${pct}%`;
+
+    const hrs = Math.floor(data.uptimeSeconds / 3600);
+    const mins = Math.floor((data.uptimeSeconds % 3600) / 60);
+    const secs = data.uptimeSeconds % 60;
+    document.getElementById('sysUptimeText').textContent = `${hrs}h ${mins}m ${secs}s`;
+    document.getElementById('sysPortsText').textContent = `HTTP: ${data.ports.http} | RTMP: ${data.ports.rtmp} | FLV: ${data.ports.httpFlv}`;
+
+    if (data.tunnel) {
+      tunnelInfo = data.tunnel;
+      updateTunnelUiBanner();
+    }
+  } catch (_) {}
+}
+
+updateTunnelUiBanner();
+fetchSystemHealth();

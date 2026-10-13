@@ -6,9 +6,9 @@ services:
     container_name: free-live-24-7-by-sletoyt
     restart: unless-stopped
     ports:
-      - "3000:3000"   # Cute Sky Web Dashboard, Cloud File System & Socket.IO
-      - "1935:1935"   # RTMP Ingest from Local PC OBS (Window + Voiceover)
-      - "8000:8000"   # HTTP-FLV & HLS Playout Preview
+      - "3000:3000"
+      - "1935:1935"
+      - "8000:8000"
     volumes:
       - ./data:/app/data
       - ./assets:/app/assets
@@ -22,9 +22,5 @@ services:
     logging:
       driver: "json-file"
       options:
-        max-size: "25m"
-        max-file: "5"
-    deploy:
-      resources:
-        limits:
-          memory: 4096M
+        max-size: "10m"
+        max-file: "3"

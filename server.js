@@ -1,17 +1,3 @@
-/**
- * Enterprise Dual-Ratio Cloud Playout Server & Auto Color-Detect Web-OBS
- * Project: free-live-24-7-by-sletoyt
- * Features:
- *  - Simultaneous Dual Live Playout (16:9 Landscape + 9:16 Vertical Shorts)
- *  - Multi-Scene System with 3 Scene Types:
- *      1. Default Scene (Max 1 - runs when live & no trigger color on screen)
- *      2. Color-Detect Scene (Auto-switches when full screen matches trigger color; reverts to Default when color clears)
- *      3. Network-Error Scene (Auto-switches when OBS ingest disconnects; reverts to Default on reconnect)
- *  - Shared Scene Sources with Independent 16:9 & 9:16 Coordinates (rect169 & rect916)
- *  - Built-in Cloud File System (Upload, Download, Manage BG Music, Logos, Videos)
- *  - Real-Time Live Logs Console & System Health Diagnostics
- */
-
 const express = require('express');
 const http = require('http');
 const path = require('path');
@@ -27,10 +13,11 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*' },
-  maxHttpBufferSize: 1e8 // 100MB chunk buffer
+  maxHttpBufferSize: 5e7
 });
 
 const PORT = parseInt(process.env.PORT, 10) || 3000;
+
 function ensureWritableDir(dirPath, fallbackName) {
   try {
     if (!fs.existsSync(dirPath)) {
@@ -56,18 +43,15 @@ const INSTANCES_FILE = path.join(DATA_DIR, 'instances.json');
 const FALLBACK_16_9 = path.join(ASSETS_DIR, 'fallback_16_9.mp4');
 const FALLBACK_9_16 = path.join(ASSETS_DIR, 'fallback_9_16.mp4');
 
-// ---------------------------------------------------------------------------
-// 1. Centralized Real-Time Logger & Log Buffer
-// ---------------------------------------------------------------------------
 const LOGS_BUFFER = [];
-const MAX_LOGS = 600;
+const MAX_LOGS = 200;
 
 function addLog(level, message, source = 'SYSTEM') {
   if (!message) return;
   const entry = {
     id: Date.now() + '_' + Math.random().toString(36).substr(2, 4),
     timestamp: new Date().toISOString(),
-    level: String(level).toUpperCase(), // 'INFO', 'WARN', 'ERROR', 'FFMPEG', 'RTMP', 'SCENE'
+    level: String(level).toUpperCase(),
     source: String(source).toUpperCase(),
     message: typeof message === 'object' ? JSON.stringify(message) : String(message)
   };
@@ -90,377 +74,376 @@ const origError = console.error;
 
 console.log = function (...args) {
   origLog.apply(console, args);
-  const text = args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : a)).join(' ');
-  addLog('INFO', text, 'SERVER');
+  addLog('INFO', args.join(' '), 'SERVER');
 };
-
 console.warn = function (...args) {
   origWarn.apply(console, args);
-  const text = args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : a)).join(' ');
-  addLog('WARN', text, 'SERVER');
+  addLog('WARN', args.join(' '), 'SERVER');
 };
-
 console.error = function (...args) {
   origError.apply(console, args);
-  const text = args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : a)).join(' ');
-  addLog('ERROR', text, 'SERVER');
+  addLog('ERROR', args.join(' '), 'SERVER');
 };
 
-// Middleware
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ limit: '25mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/assets', express.static(ASSETS_DIR));
 app.use('/uploads', express.static(UPLOADS_DIR));
+app.use('/assets', express.static(ASSETS_DIR));
 
-// ---------------------------------------------------------------------------
-// 2. Cloud File System (Multer Storage for BG Music, Logos, Videos)
-// ---------------------------------------------------------------------------
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, UPLOADS_DIR);
-  },
+  destination: (req, file, cb) => cb(null, UPLOADS_DIR),
   filename: (req, file, cb) => {
-    const safeOriginal = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const finalName = fs.existsSync(path.join(UPLOADS_DIR, safeOriginal))
-      ? `${Date.now()}_${safeOriginal}`
-      : safeOriginal;
-    cb(null, finalName);
+    const cleanName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    cb(null, `${Date.now()}_${cleanName}`);
   }
 });
 
 const upload = multer({
   storage,
-  limits: { fileSize: 1024 * 1024 * 1024 } // 1GB limit
+  limits: { fileSize: 300 * 1024 * 1024 }
 });
 
-function getFileCategory(filename) {
+function detectFileCategory(filename) {
   const ext = path.extname(filename).toLowerCase();
-  if (['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac'].includes(ext)) return 'audio';
-  if (['.mp4', '.webm', '.mkv', '.mov', '.avi'].includes(ext)) return 'video';
+  if (['.mp3', '.wav', '.ogg', '.aac', '.m4a', '.flac'].includes(ext)) return 'audio';
   if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'].includes(ext)) return 'image';
+  if (['.mp4', '.webm', '.mkv', '.mov', '.flv'].includes(ext)) return 'video';
   return 'other';
 }
 
 function listUploadedFiles() {
-  try {
-    const names = fs.readdirSync(UPLOADS_DIR);
-    return names
-      .filter((n) => !n.startsWith('.'))
-      .map((name) => {
-        const fullPath = path.join(UPLOADS_DIR, name);
+  if (!fs.existsSync(UPLOADS_DIR)) return [];
+  const files = fs.readdirSync(UPLOADS_DIR);
+  return files
+    .map((filename) => {
+      const fullPath = path.join(UPLOADS_DIR, filename);
+      try {
         const stat = fs.statSync(fullPath);
+        if (!stat.isFile()) return null;
+        const displayName = filename.replace(/^\d+_/, '');
         return {
-          name,
-          size: stat.size,
-          category: getFileCategory(name),
-          url: `/uploads/${encodeURIComponent(name)}`,
-          downloadUrl: `/api/files/download/${encodeURIComponent(name)}`,
-          updatedAt: stat.mtime.toISOString()
+          id: filename,
+          filename,
+          displayName,
+          category: detectFileCategory(filename),
+          sizeBytes: stat.size,
+          url: `/uploads/${encodeURIComponent(filename)}`,
+          downloadUrl: `/api/files/${encodeURIComponent(filename)}/download`,
+          uploadedAt: stat.mtime.toISOString()
         };
-      })
-      .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-  } catch (err) {
-    return [];
-  }
+      } catch (_) {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
 }
 
-app.get('/api/files', (req, res) => {
-  res.json({ files: listUploadedFiles() });
-});
-
-app.post('/api/files/upload', upload.array('files', 20), (req, res) => {
-  const uploaded = (req.files || []).map((f) => f.filename);
-  addLog('INFO', `Uploaded ${uploaded.length} file(s) to Cloud File System: ${uploaded.join(', ')}`, 'FILES');
-  const allFiles = listUploadedFiles();
-  io.emit('files-update', allFiles);
-  res.json({ success: true, uploaded, files: allFiles });
-});
-
-app.get('/api/files/download/:filename', (req, res) => {
-  const safeName = path.basename(req.params.filename);
-  const target = path.join(UPLOADS_DIR, safeName);
-  if (!fs.existsSync(target)) {
-    return res.status(404).json({ error: 'File not found' });
-  }
-  res.download(target, safeName);
-});
-
-app.put('/api/files/:filename', (req, res) => {
-  const oldName = path.basename(req.params.filename);
-  const newRaw = (req.body.newName || '').trim();
-  if (!newRaw) return res.status(400).json({ error: 'New filename required' });
-
-  const safeNew = newRaw.replace(/[^a-zA-Z0-9._-]/g, '_');
-  const oldPath = path.join(UPLOADS_DIR, oldName);
-  const newPath = path.join(UPLOADS_DIR, safeNew);
-
-  if (!fs.existsSync(oldPath)) return res.status(404).json({ error: 'File not found' });
-  fs.renameSync(oldPath, newPath);
-  addLog('INFO', `Renamed file "${oldName}" -> "${safeNew}"`, 'FILES');
-  const allFiles = listUploadedFiles();
-  io.emit('files-update', allFiles);
-  res.json({ success: true, files: allFiles });
-});
-
-app.delete('/api/files/:filename', (req, res) => {
-  const safeName = path.basename(req.params.filename);
-  const target = path.join(UPLOADS_DIR, safeName);
-  if (fs.existsSync(target)) {
-    fs.unlinkSync(target);
-    addLog('WARN', `Deleted file "${safeName}" from Cloud File System`, 'FILES');
-  }
-  const allFiles = listUploadedFiles();
-  io.emit('files-update', allFiles);
-  res.json({ success: true, files: allFiles });
-});
-
-// ---------------------------------------------------------------------------
-// 3. Cute Sky Fallback Video Assets Generator (16:9 & 9:16)
-// ---------------------------------------------------------------------------
-function generateFallbackAssets() {
-  if (!fs.existsSync(FALLBACK_16_9)) {
-    addLog('INFO', 'Generating Sky-Themed 16:9 Standby Scene (fallback_16_9.mp4)...', 'ASSET');
-    const f16 = spawn('ffmpeg', [
+function generateFallbackVideo(filePath, resolution, titleText) {
+  return new Promise((resolve) => {
+    if (fs.existsSync(filePath) && fs.statSync(filePath).size > 1000) {
+      return resolve();
+    }
+    const [w, h] = resolution.split('x');
+    const args = [
       '-y',
-      '-f', 'lavfi', '-i', 'color=c=#8fd3fe:s=1920x1080:d=8:r=30',
-      '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo',
-      '-vf', "drawtext=text='PAUSE // STREAM STANDBY':fontcolor=white:fontsize=64:box=1:boxcolor=#2b7de9@0.85:boxborderw=26:x=(w-text_w)/2:y=(h-text_h)/2-40,drawtext=text='free-live-24-7-by-sletoyt Sky Cloud Playout':fontcolor=#1e3a5f:fontsize=34:x=(w-text_w)/2:y=(h-text_h)/2+60",
-      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k', '-t', '8',
-      FALLBACK_16_9
-    ]);
-    f16.on('close', (c) => addLog('INFO', `16:9 Sky Fallback asset rendered (exit ${c})`, 'ASSET'));
-  }
+      '-f', 'lavfi',
+      '-i', `color=c=#0f172a:s=${resolution}:r=15:d=4`,
+      '-f', 'lavfi',
+      '-i', 'anullsrc=r=44100:cl=stereo',
+      '-vf',
+      `drawbox=x=20:y=20:w=${w}-40:h=${h}-40:color=#38bdf8@0.6:t=3,` +
+      `drawtext=text='${titleText}':fontcolor=#f8fafc:fontsize=26:x=(w-text_w)/2:y=(h-text_h)/2-15,` +
+      `drawtext=text='Waiting for OBS Stream...':fontcolor=#f472b6:fontsize=16:x=(w-text_w)/2:y=(h-text_h)/2+20`,
+      '-c:v', 'libx264',
+      '-preset', 'ultrafast',
+      '-crf', '30',
+      '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac',
+      '-b:a', '64k',
+      '-shortest',
+      filePath
+    ];
 
-  if (!fs.existsSync(FALLBACK_9_16)) {
-    addLog('INFO', 'Generating Sky-Themed 9:16 Vertical Standby Scene (fallback_9_16.mp4)...', 'ASSET');
-    const f9 = spawn('ffmpeg', [
-      '-y',
-      '-f', 'lavfi', '-i', 'color=c=#8fd3fe:s=1080x1920:d=8:r=30',
-      '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo',
-      '-vf', "drawtext=text='PAUSE // STANDBY':fontcolor=white:fontsize=62:box=1:boxcolor=#2b7de9@0.85:boxborderw=22:x=(w-text_w)/2:y=(h-text_h)/2-70,drawtext=text='Waiting for Live Signal...':fontcolor=#1e3a5f:fontsize=36:x=(w-text_w)/2:y=(h-text_h)/2+30",
-      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k', '-t', '8',
-      FALLBACK_9_16
-    ]);
-    f9.on('close', (c) => addLog('INFO', `9:16 Sky Fallback asset rendered (exit ${c})`, 'ASSET'));
-  }
+    const proc = spawn('ffmpeg', args);
+    proc.on('close', () => resolve());
+    proc.on('error', () => resolve());
+  });
 }
-generateFallbackAssets();
 
-// ---------------------------------------------------------------------------
-// 4. Multi-Scene Data Structure (Shared Sources + Dual 16:9 & 9:16 Rects)
-// ---------------------------------------------------------------------------
-const instances = new Map();
+async function ensureFallbackAssets() {
+  await generateFallbackVideo(FALLBACK_16_9, '640x360', 'SLETO SKY 16-9 STANDBY');
+  await generateFallbackVideo(FALLBACK_9_16, '360x640', 'SLETO SKY 9-16 STANDBY');
+}
+ensureFallbackAssets();
 
 function createDefaultScenes() {
   return [
     {
-      id: 'scene_default',
-      name: '1. Default Live (Window + Voiceover)',
-      type: 'default', // Max 1 allowed! Plays when incoming live has no trigger color
+      id: 'scene_default_main',
+      name: '🎮 Main Gameplay (Default)',
+      type: 'default',
       triggerColor: '#00ff00',
-      tolerance: 35,
-      muteIncomingAudio: false,
+      colorTolerance: 38,
+      bgColor: '#0f172a',
       sources: [
         {
-          id: 'src_live_win',
-          name: 'Incoming Window + Voiceover (OBS)',
+          id: 'src_live_win_1',
+          name: 'Incoming Window + Voiceover',
           type: 'live-window',
-          fileUrl: '',
-          text: '',
-          color: '#ffffff',
-          bgColor: 'rgba(43, 125, 233, 0.85)',
-          fontSize: 44,
+          url: '',
+          text: 'LIVE WINDOW FEED',
+          color: '#38bdf8',
           volume: 1.0,
+          muted: false,
           loop: true,
           visible: true,
-          rect169: { x: 0, y: 0, width: 1920, height: 1080, visible: true },
-          rect916: { x: 0, y: 350, width: 1080, height: 1220, visible: true }
+          rect169: { x: 0, y: 0, w: 1920, h: 1080 },
+          rect916: { x: 40, y: 420, w: 1000, h: 600 }
         },
         {
-          id: 'src_default_tag',
-          name: 'Live Sky Badge',
+          id: 'src_title_1',
+          name: 'Stream Tag Banner',
           type: 'text',
-          fileUrl: '',
-          text: '☁️ LIVE // SLETOYT',
-          color: '#ffffff',
-          bgColor: 'rgba(59, 158, 255, 0.88)',
-          fontSize: 38,
+          url: '',
+          text: '☁️ SLETO LIVE 24/7',
+          color: '#f472b6',
           volume: 1.0,
+          muted: true,
           loop: true,
           visible: true,
-          rect169: { x: 60, y: 50, width: 460, height: 74, visible: true },
-          rect916: { x: 100, y: 120, width: 880, height: 90, visible: true }
+          rect169: { x: 40, y: 36, w: 480, h: 72 },
+          rect916: { x: 140, y: 120, w: 800, h: 110 }
         }
       ]
     },
     {
-      id: 'scene_pause_color',
-      name: '2. Pause Scene (Auto Color Detect)',
-      type: 'color-detect', // Activates automatically when screen turns triggerColor!
-      triggerColor: '#000000', // Default black fade-to-color in OBS (customizable!)
-      tolerance: 32,
-      muteIncomingAudio: true,
+      id: 'scene_color_pause',
+      name: '🌸 Sky Pause Screen (Color Auto)',
+      type: 'color-detect',
+      triggerColor: '#000000',
+      colorTolerance: 28,
+      bgColor: '#1e1b4b',
       sources: [
         {
           id: 'src_pause_banner',
-          name: 'Cute Pause Cloud Banner',
+          name: 'Pause Heading',
           type: 'text',
-          fileUrl: '',
-          text: '🌸 PAUSE // BE RIGHT BACK ☁️',
-          color: '#ffffff',
-          bgColor: 'rgba(255, 143, 171, 0.92)',
-          fontSize: 58,
+          url: '',
+          text: '✨ STREAM IS PAUSED ✨',
+          color: '#38bdf8',
           volume: 1.0,
+          muted: true,
           loop: true,
           visible: true,
-          rect169: { x: 360, y: 440, width: 1200, height: 160, visible: true },
-          rect916: { x: 80, y: 820, width: 920, height: 220, visible: true }
+          rect169: { x: 360, y: 420, w: 1200, h: 160 },
+          rect916: { x: 80, y: 780, w: 920, h: 200 }
+        },
+        {
+          id: 'src_pause_sub',
+          name: 'Pause Subtitle',
+          type: 'text',
+          url: '',
+          text: 'Wait For Few Sec • Starting Soon!',
+          color: '#f472b6',
+          volume: 1.0,
+          muted: true,
+          loop: true,
+          visible: true,
+          rect169: { x: 460, y: 600, w: 1000, h: 90 },
+          rect916: { x: 120, y: 1010, w: 840, h: 110 }
         }
       ]
     },
     {
-      id: 'scene_network_error',
-      name: '3. Network Error Scene (No OBS Signal)',
-      type: 'network-error', // Activates automatically when OBS stream drops!
-      triggerColor: '#ff0000',
-      tolerance: 35,
-      muteIncomingAudio: true,
+      id: 'scene_net_error',
+      name: '📡 Network Error Fallback',
+      type: 'network-error',
+      triggerColor: '#ff0055',
+      colorTolerance: 30,
+      bgColor: '#172554',
       sources: [
         {
-          id: 'src_net_err_banner',
-          name: 'Network Reconnecting Banner',
+          id: 'src_net_err_txt',
+          name: 'Reconnecting Notice',
           type: 'text',
-          fileUrl: '',
-          text: '☁️ NETWORK STANDBY // RECONNECTING...',
-          color: '#ffffff',
-          bgColor: 'rgba(43, 125, 233, 0.92)',
-          fontSize: 52,
+          url: '',
+          text: '☁️ SIGNAL LOST — RECONNECTING OBS...',
+          color: '#38bdf8',
           volume: 1.0,
+          muted: true,
           loop: true,
           visible: true,
-          rect169: { x: 310, y: 450, width: 1300, height: 150, visible: true },
-          rect916: { x: 70, y: 830, width: 940, height: 220, visible: true }
+          rect169: { x: 310, y: 450, w: 1300, h: 160 },
+          rect916: { x: 70, y: 820, w: 940, h: 220 }
         }
       ]
     }
   ];
 }
 
+const instances = new Map();
+
+function normalizeScenes(scenes) {
+  if (!Array.isArray(scenes) || scenes.length === 0) {
+    return createDefaultScenes();
+  }
+  let hasDefault = false;
+  const normalized = scenes.map((sc, idx) => {
+    let type = sc.type || (idx === 0 ? 'default' : 'color-detect');
+    if (type === 'default') {
+      if (hasDefault) {
+        type = 'color-detect';
+      } else {
+        hasDefault = true;
+      }
+    }
+    const sources = Array.isArray(sc.sources)
+      ? sc.sources.map((src) => ({
+          id: src.id || 'src_' + Math.random().toString(36).substr(2, 6),
+          name: src.name || 'Source Layer',
+          type: src.type || 'text',
+          url: src.url || '',
+          fileId: src.fileId || '',
+          text: src.text || '',
+          color: src.color || '#38bdf8',
+          volume: typeof src.volume === 'number' ? src.volume : 1.0,
+          muted: Boolean(src.muted),
+          loop: src.loop !== undefined ? Boolean(src.loop) : true,
+          visible: src.visible !== undefined ? Boolean(src.visible) : true,
+          rect169: src.rect169 || { x: 100, y: 100, w: 640, h: 360 },
+          rect916: src.rect916 || { x: 80, y: 400, w: 920, h: 520 }
+        }))
+      : [];
+
+    return {
+      id: sc.id || 'scene_' + Math.random().toString(36).substr(2, 6),
+      name: sc.name || `Scene ${idx + 1}`,
+      type,
+      triggerColor: sc.triggerColor || '#000000',
+      colorTolerance: Number(sc.colorTolerance) || 32,
+      bgColor: sc.bgColor || '#0f172a',
+      sources
+    };
+  });
+
+  if (!hasDefault && normalized.length > 0) {
+    normalized[0].type = 'default';
+  }
+  return normalized;
+}
+
+function serializeInstance(inst) {
+  return {
+    id: inst.id,
+    name: inst.name,
+    mode: 'window-voiceover-dual',
+    rtmpIngestKey: inst.rtmpIngestKey,
+    rtmpUrl169: inst.rtmpUrl169 || 'rtmp://a.rtmp.youtube.com/live2',
+    streamKey169: inst.streamKey169 || '',
+    enable169: inst.enable169 !== undefined ? Boolean(inst.enable169) : true,
+    rtmpUrl916: inst.rtmpUrl916 || 'rtmp://a.rtmp.youtube.com/live2',
+    streamKey916: inst.streamKey916 || '',
+    enable916: inst.enable916 !== undefined ? Boolean(inst.enable916) : true,
+    fps: Number(inst.fps) || 30,
+    bitrate: Number(inst.bitrate) || 2500,
+    autoSceneSwitch: inst.autoSceneSwitch !== undefined ? Boolean(inst.autoSceneSwitch) : true,
+    activeSceneId: inst.activeSceneId,
+    scenes: normalizeScenes(inst.scenes),
+    status: inst.status || 'offline',
+    obsConnected: Boolean(inst.obsConnected),
+    detectedScreenColor: inst.detectedScreenColor || null,
+    lastSwitchReason: inst.lastSwitchReason || 'Manual / Initial',
+    uptimeStart: inst.uptimeStart || null
+  };
+}
+
 function saveInstancesToDisk() {
   try {
-    const dataToSave = Array.from(instances.values()).map((inst) => ({
-      id: inst.id,
-      name: inst.name,
-      streamKey: inst.streamKey,
-      mode: inst.mode || 'window-voiceover-dual',
-      rtmp169Primary: inst.rtmp169Primary || '',
-      rtmp169Backup: inst.rtmp169Backup || '',
-      rtmp916Primary: inst.rtmp916Primary || '',
-      rtmp916Backup: inst.rtmp916Backup || '',
-      playlistUrls: inst.playlistUrls || [],
-      scenes: inst.scenes || createDefaultScenes(),
-      activeSceneId: inst.activeSceneId || 'scene_default',
-      autoSceneSwitch: inst.autoSceneSwitch !== false
-    }));
-    fs.writeFileSync(INSTANCES_FILE, JSON.stringify(dataToSave, null, 2), 'utf-8');
+    const list = Array.from(instances.values()).map(serializeInstance);
+    fs.writeFileSync(INSTANCES_FILE, JSON.stringify(list, null, 2), 'utf8');
   } catch (err) {
-    addLog('ERROR', `Error saving instances to disk: ${err.message}`, 'STORAGE');
+    origError('[Storage Error]', err.message);
   }
 }
 
 function loadInstancesFromDisk() {
   try {
-    if (fs.existsSync(INSTANCES_FILE)) {
-      const raw = fs.readFileSync(INSTANCES_FILE, 'utf-8');
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        parsed.forEach((item) => {
-          const scenes = Array.isArray(item.scenes) && item.scenes.length > 0
-            ? item.scenes
-            : createDefaultScenes();
-          instances.set(item.id, {
-            id: item.id,
-            name: item.name || 'Dual Sky Stream',
-            streamKey: item.streamKey || 'live_stream_sletoyt',
-            mode: item.mode === 'playlist-loop' ? 'playlist-loop' : 'window-voiceover-dual',
-            rtmp169Primary: item.rtmp169Primary || item.primaryRtmp || '',
-            rtmp169Backup: item.rtmp169Backup || item.backupRtmp || '',
-            rtmp916Primary: item.rtmp916Primary || '',
-            rtmp916Backup: item.rtmp916Backup || '',
-            playlistUrls: item.playlistUrls || [],
-            scenes,
-            activeSceneId: item.activeSceneId || scenes[0].id,
-            autoSceneSwitch: item.autoSceneSwitch !== false,
-            status: 'offline',
-            uptimeStart: null,
-            isPublishing: false,
-            detectedColorHex: null,
-            proc169: null,
-            proc916: null,
-            colorProbeProc: null,
-            usingBrowserPipe: false
-          });
-        });
-        addLog('INFO', `Loaded ${instances.size} instance(s) from disk store`, 'STORAGE');
-      }
+    if (!fs.existsSync(INSTANCES_FILE)) {
+      const defaultScenes = createDefaultScenes();
+      const demoId = 'inst_main_1';
+      instances.set(demoId, {
+        id: demoId,
+        name: 'Sleto 24/7 Dual Playout (16:9 + 9:16)',
+        mode: 'window-voiceover-dual',
+        rtmpIngestKey: 'live_sleto',
+        rtmpUrl169: 'rtmp://a.rtmp.youtube.com/live2',
+        streamKey169: '',
+        enable169: true,
+        rtmpUrl916: 'rtmp://a.rtmp.youtube.com/live2',
+        streamKey916: '',
+        enable916: true,
+        fps: 30,
+        bitrate: 2500,
+        autoSceneSwitch: true,
+        activeSceneId: defaultScenes[0].id,
+        scenes: defaultScenes,
+        status: 'offline',
+        obsConnected: false,
+        detectedScreenColor: null,
+        lastSwitchReason: 'Default Startup',
+        uptimeStart: null,
+        proc169: null,
+        proc916: null,
+        colorDetectorProc: null
+      });
+      saveInstancesToDisk();
+      return;
     }
-  } catch (err) {
-    addLog('ERROR', `Error loading instances from disk: ${err.message}`, 'STORAGE');
-  }
-
-  if (instances.size === 0) {
-    const defaultId = 'inst_' + Date.now();
-    const scenes = createDefaultScenes();
-    instances.set(defaultId, {
-      id: defaultId,
-      name: 'Main Dual Live (16:9 + 9:16)',
-      streamKey: 'live_stream_sletoyt',
-      mode: 'window-voiceover-dual',
-      rtmp169Primary: '',
-      rtmp169Backup: '',
-      rtmp916Primary: '',
-      rtmp916Backup: '',
-      playlistUrls: [],
-      scenes,
-      activeSceneId: 'scene_default',
-      autoSceneSwitch: true,
-      status: 'offline',
-      uptimeStart: null,
-      isPublishing: false,
-      detectedColorHex: null,
-      proc169: null,
-      proc916: null,
-      colorProbeProc: null,
-      usingBrowserPipe: false
+    const raw = fs.readFileSync(INSTANCES_FILE, 'utf8');
+    const list = JSON.parse(raw);
+    list.forEach((item) => {
+      const scenes = normalizeScenes(item.scenes);
+      const defaultScene = scenes.find((s) => s.type === 'default') || scenes[0];
+      instances.set(item.id, {
+        ...item,
+        mode: 'window-voiceover-dual',
+        scenes,
+        activeSceneId: scenes.some((s) => s.id === item.activeSceneId)
+          ? item.activeSceneId
+          : defaultScene.id,
+        status: 'offline',
+        obsConnected: false,
+        detectedScreenColor: null,
+        lastSwitchReason: 'Ready',
+        uptimeStart: null,
+        proc169: null,
+        proc916: null,
+        colorDetectorProc: null
+      });
     });
-    saveInstancesToDisk();
+  } catch (err) {
+    origError('[Storage Load Error]', err.message);
   }
 }
+
 loadInstancesFromDisk();
 
-// ---------------------------------------------------------------------------
-// 5. Scene Helper & Automatic Color Detection Engine
-// ---------------------------------------------------------------------------
-function getSceneByType(inst, type) {
-  return (inst.scenes || []).find((s) => s.type === type);
-}
-
-function getActiveScene(inst) {
-  return (
-    (inst.scenes || []).find((s) => s.id === inst.activeSceneId) ||
-    getSceneByType(inst, 'default') ||
-    inst.scenes[0]
-  );
+function broadcastInstanceStatus() {
+  const payload = Array.from(instances.values()).map(serializeInstance);
+  io.emit('instances-update', payload);
 }
 
 function hexToRgb(hex) {
   const clean = String(hex || '#000000').replace('#', '').trim();
   if (clean.length !== 6) return { r: 0, g: 0, b: 0 };
+  const num = parseInt(clean, 16);
+  if (Number.isNaN(num)) return { r: 0, g: 0, b: 0 };
   return {
-    r: parseInt(clean.substring(0, 2), 16) || 0,
-    g: parseInt(clean.substring(2, 4), 16) || 0,
-    b: parseInt(clean.substring(4, 6), 16) || 0
+    r: (num >> 16) & 255,
+    g: (num >> 8) & 255,
+    b: num & 255
   };
 }
 
@@ -469,229 +452,586 @@ function rgbToHex(r, g, b) {
   return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }
 
-function colorDistance(c1, c2) {
-  // Max Chebyshev channel distance (0..255)
-  return Math.max(Math.abs(c1.r - c2.r), Math.abs(c1.g - c2.g), Math.abs(c1.b - c2.b));
+function colorDistance(rgb1, rgb2) {
+  const dr = rgb1.r - rgb2.r;
+  const dg = rgb1.g - rgb2.g;
+  const db = rgb1.b - rgb2.b;
+  return Math.sqrt(dr * dr + dg * dg + db * db);
 }
 
-function switchInstanceScene(inst, targetSceneId, reason = 'MANUAL') {
-  if (!inst || !targetSceneId || inst.activeSceneId === targetSceneId) return false;
-  const target = (inst.scenes || []).find((s) => s.id === targetSceneId);
-  if (!target) return false;
+function switchInstanceScene(inst, targetSceneId, reason = 'Manual Switch') {
+  if (!inst) return false;
+  const targetScene = inst.scenes.find((s) => s.id === targetSceneId);
+  if (!targetScene) return false;
+  if (inst.activeSceneId === targetSceneId) return false;
 
-  inst.activeSceneId = target.id;
+  inst.activeSceneId = targetSceneId;
+  inst.lastSwitchReason = reason;
   addLog(
     'SCENE',
-    `[${inst.name}] Scene switched -> "${target.name}" (${target.type.toUpperCase()}) [Reason: ${reason}]`,
-    'SCENE'
+    `[${inst.name}] Switched to "${targetScene.name}" (${targetScene.type.toUpperCase()}) — Reason: ${reason}`,
+    'SCENE-ENGINE'
   );
 
-  // If running headless backend FFmpeg composition (not browser canvas pipe), restart scene compositor
-  if (inst.status === 'live' && !inst.usingBrowserPipe && inst.mode === 'window-voiceover-dual') {
-    startDualBackendPlayout(inst);
-  }
-
+  saveInstancesToDisk();
   broadcastInstanceStatus();
   io.emit('scene-switched', {
     instanceId: inst.id,
     activeSceneId: inst.activeSceneId,
-    sceneName: target.name,
-    sceneType: target.type,
+    sceneName: targetScene.name,
+    sceneType: targetScene.type,
     reason
   });
+
+  if (inst.status === 'live' && inst.playoutDriver === 'backend') {
+    restartBackendDualPlayoutOnSceneChange(inst);
+  }
   return true;
 }
 
-function stopColorProbe(inst) {
-  if (inst.colorProbeProc) {
-    try {
-      inst.colorProbeProc.kill('SIGTERM');
-    } catch (_) {}
-    inst.colorProbeProc = null;
-  }
-}
-
 function startBackendColorDetector(inst) {
-  stopColorProbe(inst);
-  if (!inst.isPublishing) return;
+  stopBackendColorDetector(inst);
+  if (!inst.obsConnected) return;
 
-  const localRtmpUrl = `rtmp://127.0.0.1:${rtmpPort}/live/${inst.streamKey}`;
-  const FRAME_W = 16;
-  const FRAME_H = 16;
-  const BYTES_PER_FRAME = FRAME_W * FRAME_H * 3; // 768 bytes per frame (rgb24)
-
-  const probe = spawn('ffmpeg', [
-    '-i', localRtmpUrl,
-    '-vf', `fps=2,scale=${FRAME_W}:${FRAME_H}`,
+  const localRtmpInput = `rtmp://127.0.0.1:${rtmpPort}/live/${inst.rtmpIngestKey}`;
+  const cleanArgs = [
+    '-loglevel', 'quiet',
+    '-threads', '1',
+    '-i', localRtmpInput,
+    '-vf', 'fps=1,scale=8:8',
     '-f', 'rawvideo',
     '-pix_fmt', 'rgb24',
     'pipe:1'
-  ]);
+  ];
 
-  inst.colorProbeProc = probe;
-  let frameBuffer = Buffer.alloc(0);
-  let noMatchStreak = 0;
+  const proc = spawn('ffmpeg', cleanArgs);
+  inst.colorDetectorProc = proc;
 
-  probe.stdout.on('data', (chunk) => {
-    frameBuffer = Buffer.concat([frameBuffer, chunk]);
+  const FRAME_BYTES = 8 * 8 * 3;
+  let buffer = Buffer.alloc(0);
 
-    while (frameBuffer.length >= BYTES_PER_FRAME) {
-      const frame = frameBuffer.slice(0, BYTES_PER_FRAME);
-      frameBuffer = frameBuffer.slice(BYTES_PER_FRAME);
-
-      // Compute average screen color
-      let sumR = 0, sumG = 0, sumB = 0;
-      const totalPixels = FRAME_W * FRAME_H;
-      for (let i = 0; i < BYTES_PER_FRAME; i += 3) {
-        sumR += frame[i];
-        sumG += frame[i + 1];
-        sumB += frame[i + 2];
-      }
-      const avgRgb = {
-        r: Math.round(sumR / totalPixels),
-        g: Math.round(sumG / totalPixels),
-        b: Math.round(sumB / totalPixels)
-      };
-      inst.detectedColorHex = rgbToHex(avgRgb.r, avgRgb.g, avgRgb.b);
-
-      if (!inst.autoSceneSwitch) continue;
-
-      // Check all 'color-detect' scenes
-      const colorScenes = (inst.scenes || []).filter((s) => s.type === 'color-detect');
-      let matchedScene = null;
-
-      for (const sc of colorScenes) {
-        const targetRgb = hexToRgb(sc.triggerColor);
-        const tol = Number(sc.tolerance) || 35;
-        let matchingPixels = 0;
-
-        for (let i = 0; i < BYTES_PER_FRAME; i += 3) {
-          const px = { r: frame[i], g: frame[i + 1], b: frame[i + 2] };
-          if (colorDistance(px, targetRgb) <= tol) {
-            matchingPixels++;
-          }
-        }
-
-        const matchRatio = matchingPixels / totalPixels;
-        if (matchRatio >= 0.80) {
-          matchedScene = sc;
-          break;
-        }
-      }
-
-      if (matchedScene) {
-        noMatchStreak = 0;
-        if (inst.activeSceneId !== matchedScene.id) {
-          switchInstanceScene(
-            inst,
-            matchedScene.id,
-            `AUTO COLOR DETECT (${matchedScene.triggerColor})`
-          );
-        }
-      } else {
-        noMatchStreak++;
-        // If currently on a color-detect scene and the trigger color is gone from screen -> revert to Default scene!
-        const currentScene = getActiveScene(inst);
-        if (currentScene && currentScene.type === 'color-detect' && noMatchStreak >= 2) {
-          const defScene = getSceneByType(inst, 'default');
-          if (defScene && inst.activeSceneId !== defScene.id) {
-            switchInstanceScene(inst, defScene.id, 'COLOR CLEARED -> DEFAULT');
-          }
-        }
-      }
-
-      io.emit('color-telemetry', {
-        instanceId: inst.id,
-        detectedColorHex: inst.detectedColorHex,
-        activeSceneId: inst.activeSceneId
-      });
+  proc.stdout.on('data', (chunk) => {
+    buffer = Buffer.concat([buffer, chunk]);
+    while (buffer.length >= FRAME_BYTES) {
+      const frame = buffer.subarray(0, FRAME_BYTES);
+      buffer = buffer.subarray(FRAME_BYTES);
+      evaluateFullScreenColorFrame(inst, frame);
     }
   });
 
-  probe.stderr.on('data', () => {});
-  probe.on('close', () => {
-    if (inst.colorProbeProc === probe) {
-      inst.colorProbeProc = null;
+  proc.on('close', () => {
+    if (inst.colorDetectorProc === proc) {
+      inst.colorDetectorProc = null;
     }
   });
+  proc.on('error', () => {});
 }
 
-// ---------------------------------------------------------------------------
-// 6. RTMP Server Engine (NodeMediaServer) & Network Error Watchdog
-// ---------------------------------------------------------------------------
+function stopBackendColorDetector(inst) {
+  if (inst && inst.colorDetectorProc) {
+    try {
+      inst.colorDetectorProc.kill('SIGKILL');
+    } catch (_) {}
+    inst.colorDetectorProc = null;
+  }
+}
+
+function evaluateFullScreenColorFrame(inst, frameBuffer) {
+  const totalPixels = 64;
+  let sumR = 0;
+  let sumG = 0;
+  let sumB = 0;
+
+  for (let i = 0; i < frameBuffer.length; i += 3) {
+    sumR += frameBuffer[i];
+    sumG += frameBuffer[i + 1];
+    sumB += frameBuffer[i + 2];
+  }
+
+  const avgRgb = {
+    r: Math.round(sumR / totalPixels),
+    g: Math.round(sumG / totalPixels),
+    b: Math.round(sumB / totalPixels)
+  };
+
+  let uniformCount = 0;
+  for (let i = 0; i < frameBuffer.length; i += 3) {
+    const px = { r: frameBuffer[i], g: frameBuffer[i + 1], b: frameBuffer[i + 2] };
+    if (colorDistance(px, avgRgb) <= 35) {
+      uniformCount++;
+    }
+  }
+
+  const uniformityRatio = uniformCount / totalPixels;
+  const currentHex = rgbToHex(avgRgb.r, avgRgb.g, avgRgb.b);
+  inst.detectedScreenColor = currentHex;
+
+  io.emit('color-telemetry', {
+    instanceId: inst.id,
+    detectedHex: currentHex,
+    uniformity: Math.round(uniformityRatio * 100)
+  });
+
+  if (!inst.autoSceneSwitch || !inst.obsConnected) return;
+
+  const colorScenes = inst.scenes.filter((s) => s.type === 'color-detect');
+  const defaultScene = inst.scenes.find((s) => s.type === 'default') || inst.scenes[0];
+
+  if (uniformityRatio >= 0.80) {
+    for (const cScene of colorScenes) {
+      const targetRgb = hexToRgb(cScene.triggerColor);
+      const dist = colorDistance(avgRgb, targetRgb);
+      const maxDist = (Number(cScene.colorTolerance) || 32) * 1.8;
+      if (dist <= maxDist) {
+        if (inst.activeSceneId !== cScene.id) {
+          switchInstanceScene(
+            inst,
+            cScene.id,
+            `Full-Screen Color Match (${currentHex} ≈ ${cScene.triggerColor})`
+          );
+        }
+        return;
+      }
+    }
+  }
+
+  const activeScene = inst.scenes.find((s) => s.id === inst.activeSceneId);
+  if (activeScene && activeScene.type === 'color-detect' && defaultScene) {
+    switchInstanceScene(
+      inst,
+      defaultScene.id,
+      `Trigger Color Cleared (${currentHex}) -> Reverted to Default Scene`
+    );
+  }
+}
+
+function resolveLocalFilePath(src) {
+  if (src.fileId) {
+    const candidate = path.join(UPLOADS_DIR, path.basename(src.fileId));
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  if (src.url && src.url.startsWith('/uploads/')) {
+    const decoded = decodeURIComponent(src.url.replace('/uploads/', ''));
+    const candidate = path.join(UPLOADS_DIR, path.basename(decoded));
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  if (src.url && /^https?:\/\//i.test(src.url)) {
+    return src.url;
+  }
+  return null;
+}
+
+function spawnScenePlayoutProcess(inst, ratioKey, rtmpTargetUrl, streamKey) {
+  const cleanUrl = (rtmpTargetUrl || '').trim().replace(/\/$/, '');
+  const cleanKey = (streamKey || '').trim();
+  if (!cleanUrl || !cleanKey) return null;
+
+  const destination = `${cleanUrl}/${cleanKey}`;
+  const is916 = ratioKey === '916';
+  const outW = is916 ? 720 : 1280;
+  const outH = is916 ? 1280 : 720;
+  const scaleFactorX = is916 ? 720 / 1080 : 1280 / 1920;
+  const scaleFactorY = is916 ? 1280 / 1920 : 720 / 1080;
+
+  const fps = Number(inst.fps) || 30;
+  const bitrate = Number(inst.bitrate) || 2200;
+
+  const activeScene =
+    inst.scenes.find((s) => s.id === inst.activeSceneId) ||
+    inst.scenes.find((s) => s.type === 'default') ||
+    inst.scenes[0];
+
+  const bgHex = (activeScene?.bgColor || '#0f172a').replace('#', '0x');
+  const sources = (activeScene?.sources || []).filter((s) => s.visible !== false);
+
+  const liveWindowSrc = sources.find((s) => s.type === 'live-window');
+  const videoSrc = sources.find((s) => s.type === 'video' && resolveLocalFilePath(s));
+  const audioSrc = sources.find((s) => s.type === 'audio' && resolveLocalFilePath(s) && !s.muted);
+  const textSources = sources.filter((s) => s.type === 'text' && s.text);
+
+  const args = ['-y', '-loglevel', 'warning', '-threads', '2'];
+
+  let mainVideoInputIndex = -1;
+  let mainAudioInputIndex = -1;
+
+  if (liveWindowSrc && inst.obsConnected && activeScene.type !== 'network-error') {
+    args.push('-i', `rtmp://127.0.0.1:${rtmpPort}/live/${inst.rtmpIngestKey}`);
+    mainVideoInputIndex = 0;
+    if (!liveWindowSrc.muted) {
+      mainAudioInputIndex = 0;
+    }
+  } else if (videoSrc) {
+    const vPath = resolveLocalFilePath(videoSrc);
+    if (videoSrc.loop !== false) {
+      args.push('-stream_loop', '-1');
+    }
+    args.push('-re', '-i', vPath);
+    mainVideoInputIndex = 0;
+    if (!videoSrc.muted) {
+      mainAudioInputIndex = 0;
+    }
+  } else {
+    args.push('-f', 'lavfi', '-i', `color=c=${bgHex}:s=${outW}x${outH}:r=${fps}`);
+    mainVideoInputIndex = 0;
+  }
+
+  let bgAudioInputIndex = -1;
+  if (audioSrc) {
+    const aPath = resolveLocalFilePath(audioSrc);
+    if (audioSrc.loop !== false) {
+      args.push('-stream_loop', '-1');
+    }
+    args.push('-i', aPath);
+    bgAudioInputIndex = 1;
+  } else if (mainAudioInputIndex === -1) {
+    args.push('-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo');
+    bgAudioInputIndex = 1;
+  }
+
+  const vfParts = [`scale=${outW}:${outH}:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2:${bgHex},format=yuv420p`];
+
+  textSources.forEach((tSrc) => {
+    const rect = is916 ? (tSrc.rect916 || { x: 80, y: 400, w: 800, h: 100 }) : (tSrc.rect169 || { x: 80, y: 80, w: 800, h: 100 });
+    const safeText = String(tSrc.text || '')
+      .replace(/[^\x20-\x7E]/g, '')
+      .replace(/:/g, '\\:')
+      .replace(/'/g, '')
+      .trim();
+    if (safeText) {
+      const fColor = (tSrc.color || '#38bdf8').replace('#', '0x');
+      const xPos = Math.max(10, Math.min(outW - 40, Math.round(rect.x * scaleFactorX) || 40));
+      const yPos = Math.max(20, Math.min(outH - 40, Math.round(rect.y * scaleFactorY) || 60));
+      vfParts.push(`drawtext=text='${safeText}':fontcolor=${fColor}:fontsize=28:x=${xPos}:y=${yPos}:box=1:boxcolor=0x0f172a@0.75:boxborderw=10`);
+    }
+  });
+
+  args.push('-vf', vfParts.join(','));
+
+  if (mainAudioInputIndex !== -1 && bgAudioInputIndex === -1) {
+    args.push('-map', `${mainVideoInputIndex}:v:0`, '-map', `${mainAudioInputIndex}:a:0?`);
+  } else if (bgAudioInputIndex !== -1) {
+    args.push('-map', `${mainVideoInputIndex}:v:0`, '-map', `${bgAudioInputIndex}:a:0`);
+  }
+
+  args.push(
+    '-c:v', 'libx264',
+    '-preset', 'ultrafast',
+    '-tune', 'zerolatency',
+    '-b:v', `${bitrate}k`,
+    '-maxrate', `${bitrate}k`,
+    '-bufsize', `${bitrate * 2}k`,
+    '-pix_fmt', 'yuv420p',
+    '-g', String(fps * 2),
+    '-r', String(fps),
+    '-c:a', 'aac',
+    '-b:a', '128k',
+    '-ar', '44100',
+    '-f', 'flv',
+    destination
+  );
+
+  addLog('FFMPEG', `Starting ${ratioKey === '916' ? '9:16 Vertical' : '16:9 Landscape'} stream for "${inst.name}" [Scene: ${activeScene?.name}]`, 'FFMPEG');
+
+  const proc = spawn('ffmpeg', args);
+
+  proc.stderr.on('data', (data) => {
+    const msg = data.toString().trim();
+    if (msg && !msg.includes('frame=')) {
+      addLog('FFMPEG', `[${inst.name} ${ratioKey}] ${msg.slice(0, 220)}`, 'FFMPEG');
+    }
+  });
+
+  proc.on('close', (code) => {
+    addLog('WARN', `[${inst.name} ${ratioKey}] FFmpeg exited with code ${code}`, 'FFMPEG');
+  });
+
+  proc.on('error', (err) => {
+    addLog('ERROR', `[${inst.name} ${ratioKey}] FFmpeg spawn error: ${err.message}`, 'FFMPEG');
+  });
+
+  return proc;
+}
+
+function stopInstanceProcesses(inst) {
+  if (!inst) return;
+  if (inst.proc169) {
+    try {
+      if (inst.proc169.stdin) inst.proc169.stdin.end();
+      inst.proc169.kill('SIGKILL');
+    } catch (_) {}
+    inst.proc169 = null;
+  }
+  if (inst.proc916) {
+    try {
+      if (inst.proc916.stdin) inst.proc916.stdin.end();
+      inst.proc916.kill('SIGKILL');
+    } catch (_) {}
+    inst.proc916 = null;
+  }
+}
+
+function startDualBackendPlayout(inst) {
+  stopInstanceProcesses(inst);
+
+  const has169 = inst.enable169 && inst.rtmpUrl169 && inst.streamKey169;
+  const has916 = inst.enable916 && inst.rtmpUrl916 && inst.streamKey916;
+
+  if (!has169 && !has916) {
+    throw new Error('Please configure at least one Stream Key (16:9 or 9:16) before going live.');
+  }
+
+  inst.playoutDriver = 'backend';
+  inst.status = 'live';
+  if (!inst.uptimeStart) inst.uptimeStart = Date.now();
+
+  if (has169) {
+    inst.proc169 = spawnScenePlayoutProcess(inst, '169', inst.rtmpUrl169, inst.streamKey169);
+  }
+  if (has916) {
+    inst.proc916 = spawnScenePlayoutProcess(inst, '916', inst.rtmpUrl916, inst.streamKey916);
+  }
+
+  broadcastInstanceStatus();
+}
+
+function restartBackendDualPlayoutOnSceneChange(inst) {
+  if (inst.status !== 'live' || inst.playoutDriver !== 'backend') return;
+  try {
+    startDualBackendPlayout(inst);
+  } catch (err) {
+    addLog('ERROR', `Scene switch restart error: ${err.message}`, 'SCENE-ENGINE');
+  }
+}
+
+function startDualBrowserPipePlayout(inst) {
+  stopInstanceProcesses(inst);
+
+  const has169 = inst.enable169 && inst.rtmpUrl169 && inst.streamKey169;
+  const has916 = inst.enable916 && inst.rtmpUrl916 && inst.streamKey916;
+
+  if (!has169 && !has916) {
+    throw new Error('Please configure at least one Stream Key (16:9 or 9:16) before starting Dual Live.');
+  }
+
+  const fps = Number(inst.fps) || 30;
+  const bitrate = Number(inst.bitrate) || 2200;
+
+  inst.playoutDriver = 'browser-dual';
+  inst.status = 'live';
+  inst.uptimeStart = Date.now();
+
+  const buildPipeArgs = (dest) => [
+    '-loglevel', 'warning',
+    '-threads', '2',
+    '-i', 'pipe:0',
+    '-c:v', 'libx264',
+    '-preset', 'ultrafast',
+    '-tune', 'zerolatency',
+    '-b:v', `${bitrate}k`,
+    '-maxrate', `${bitrate}k`,
+    '-bufsize', `${bitrate * 2}k`,
+    '-pix_fmt', 'yuv420p',
+    '-g', String(fps * 2),
+    '-r', String(fps),
+    '-c:a', 'aac',
+    '-b:a', '128k',
+    '-ar', '44100',
+    '-f', 'flv',
+    dest
+  ];
+
+  if (has169) {
+    const dest169 = `${inst.rtmpUrl169.replace(/\/$/, '')}/${inst.streamKey169.trim()}`;
+    inst.proc169 = spawn('ffmpeg', buildPipeArgs(dest169));
+    inst.proc169.stdin.on('error', () => {});
+    inst.proc169.stderr.on('data', (d) => {
+      const m = d.toString().trim();
+      if (m && !m.includes('frame=')) addLog('FFMPEG', `[16:9 Pipe] ${m.slice(0, 180)}`, 'FFMPEG');
+    });
+  }
+
+  if (has916) {
+    const dest916 = `${inst.rtmpUrl916.replace(/\/$/, '')}/${inst.streamKey916.trim()}`;
+    inst.proc916 = spawn('ffmpeg', buildPipeArgs(dest916));
+    inst.proc916.stdin.on('error', () => {});
+    inst.proc916.stderr.on('data', (d) => {
+      const m = d.toString().trim();
+      if (m && !m.includes('frame=')) addLog('FFMPEG', `[9:16 Pipe] ${m.slice(0, 180)}`, 'FFMPEG');
+    });
+  }
+
+  broadcastInstanceStatus();
+}
+
 const { nms, rtmpPort, httpPort } = initializeRtmpServer({ mediaRoot: MEDIA_DIR });
 
-nms.on('prePublish', (id, StreamPath) => {
-  const streamKey = StreamPath.split('/')[2];
-  addLog('RTMP', `[Connect] Incoming RTMP feed connected on ${StreamPath}`, 'RTMP');
+function extractStreamKeyFromPath(StreamPath = '') {
+  const parts = String(StreamPath).split('/').filter(Boolean);
+  return parts[parts.length - 1] || '';
+}
+
+nms.on('postPublish', (id, StreamPath) => {
+  const streamKey = typeof id === 'string' ? extractStreamKeyFromPath(StreamPath) : extractStreamKeyFromPath(id?.streamPath || StreamPath);
+  addLog('RTMP', `Incoming OBS stream connected on key: "${streamKey}"`, 'RTMP');
 
   for (const inst of instances.values()) {
-    if (inst.streamKey === streamKey) {
-      inst.isPublishing = true;
-      addLog('INFO', `[${inst.name}] OBS Window+Voiceover feed online!`, 'SUPERVISOR');
+    if (inst.rtmpIngestKey === streamKey) {
+      inst.obsConnected = true;
+      const defaultScene = inst.scenes.find((s) => s.type === 'default') || inst.scenes[0];
 
-      // Automatically switch from Network-Error scene back to Default scene!
-      if (inst.autoSceneSwitch) {
-        const defScene = getSceneByType(inst, 'default');
-        if (defScene) {
-          switchInstanceScene(inst, defScene.id, 'OBS STREAM CONNECTED -> DEFAULT');
+      if (inst.autoSceneSwitch && defaultScene) {
+        switchInstanceScene(inst, defaultScene.id, 'OBS Live Signal Connected -> Default Scene');
+      } else {
+        broadcastInstanceStatus();
+        if (inst.status === 'live' && inst.playoutDriver === 'backend') {
+          restartBackendDualPlayoutOnSceneChange(inst);
         }
       }
 
-      // Start real-time full-screen color detector on incoming RTMP stream
-      startBackendColorDetector(inst);
-
-      if (inst.status === 'live' && !inst.usingBrowserPipe) {
-        startDualBackendPlayout(inst);
-      }
-      broadcastInstanceStatus();
-      break;
+      setTimeout(() => {
+        if (inst.obsConnected) startBackendColorDetector(inst);
+      }, 1500);
     }
   }
 });
 
 nms.on('donePublish', (id, StreamPath) => {
-  const streamKey = StreamPath.split('/')[2];
-  addLog('WARN', `[Disconnect] Incoming RTMP feed ended on ${StreamPath}`, 'RTMP');
+  const streamKey = typeof id === 'string' ? extractStreamKeyFromPath(StreamPath) : extractStreamKeyFromPath(id?.streamPath || StreamPath);
+  addLog('WARN', `OBS stream disconnected on key: "${streamKey}"`, 'RTMP');
 
   for (const inst of instances.values()) {
-    if (inst.streamKey === streamKey) {
-      inst.isPublishing = false;
-      inst.detectedColorHex = null;
-      stopColorProbe(inst);
+    if (inst.rtmpIngestKey === streamKey) {
+      inst.obsConnected = false;
+      inst.detectedScreenColor = null;
+      stopBackendColorDetector(inst);
 
-      addLog('WARN', `[${inst.name}] OBS signal lost! Switching to Network-Error Scene...`, 'SUPERVISOR');
-
-      if (inst.autoSceneSwitch) {
-        const netErrScene = getSceneByType(inst, 'network-error');
-        if (netErrScene) {
-          switchInstanceScene(inst, netErrScene.id, 'NO OBS SIGNAL -> NETWORK ERROR SCENE');
+      const netErrScene = inst.scenes.find((s) => s.type === 'network-error');
+      if (inst.autoSceneSwitch && netErrScene) {
+        switchInstanceScene(inst, netErrScene.id, 'No OBS Live Signal -> Auto Network Error Scene');
+      } else {
+        broadcastInstanceStatus();
+        if (inst.status === 'live' && inst.playoutDriver === 'backend') {
+          restartBackendDualPlayoutOnSceneChange(inst);
         }
       }
-
-      if (inst.status === 'live' && !inst.usingBrowserPipe) {
-        startDualBackendPlayout(inst);
-      }
-      broadcastInstanceStatus();
-      break;
     }
   }
 });
 
 nms.run();
 
-// Proxy HTTP-FLV streams through Express port 3000 so browser players work anywhere
-app.get('/api/flv-proxy/:streamName', (req, res) => {
-  const rawName = req.params.streamName.replace(/\.flv$/i, '');
-  const flvUrl = `http://127.0.0.1:${httpPort}/live/${rawName}.flv`;
+const tunnelState = {
+  active: false,
+  status: 'starting',
+  publicRtmpUrl: null,
+  hostPort: null,
+  provider: 'pinggy-tcp',
+  updatedAt: null
+};
 
-  const proxyReq = http.get(flvUrl, (proxyRes) => {
-    res.writeHead(proxyRes.statusCode || 200, {
-      'Content-Type': 'video/x-flv',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': '*'
+let tunnelProc = null;
+let tunnelRetryTimer = null;
+
+function stripAnsi(str) {
+  return String(str || '').replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
+}
+
+function startRtmpTunnel() {
+  if (tunnelRetryTimer) {
+    clearTimeout(tunnelRetryTimer);
+    tunnelRetryTimer = null;
+  }
+  if (tunnelProc) {
+    try {
+      tunnelProc.kill('SIGKILL');
+    } catch (_) {}
+    tunnelProc = null;
+  }
+
+  tunnelState.status = 'connecting';
+  io.emit('tunnel-update', tunnelState);
+
+  const sshArgs = [
+    '-p', '443',
+    '-o', 'StrictHostKeyChecking=no',
+    '-o', 'UserKnownHostsFile=/dev/null',
+    '-o', 'ServerAliveInterval=30',
+    '-o', 'ConnectTimeout=12',
+    '-T',
+    `-R0:127.0.0.1:${rtmpPort}`,
+    'tcp@a.pinggy.io'
+  ];
+
+  try {
+    const proc = spawn('ssh', sshArgs);
+    tunnelProc = proc;
+
+    const handleTunnelOutput = (chunk) => {
+      const text = stripAnsi(chunk.toString());
+      const match = text.match(/(?:tcp:\/\/)?([a-zA-Z0-9.-]+\.pinggy\.(?:link|io|online):\d+)/i);
+      if (match && match[1]) {
+        const hostPort = match[1].trim();
+        const rtmpUrl = `rtmp://${hostPort}/live`;
+        if (tunnelState.publicRtmpUrl !== rtmpUrl) {
+          tunnelState.active = true;
+          tunnelState.status = 'connected';
+          tunnelState.hostPort = hostPort;
+          tunnelState.publicRtmpUrl = rtmpUrl;
+          tunnelState.updatedAt = new Date().toISOString();
+          addLog('RTMP', `Public OBS RTMP Tunnel Ready: ${rtmpUrl}`, 'TUNNEL');
+          origLog(`  🔗 Public OBS RTMP Server: ${rtmpUrl}`);
+          io.emit('tunnel-update', tunnelState);
+        }
+      }
+    };
+
+    proc.stdout.on('data', handleTunnelOutput);
+    proc.stderr.on('data', handleTunnelOutput);
+
+    proc.on('close', () => {
+      if (tunnelProc === proc) {
+        tunnelProc = null;
+        tunnelState.active = false;
+        tunnelState.status = 'reconnecting';
+        io.emit('tunnel-update', tunnelState);
+        tunnelRetryTimer = setTimeout(() => startRtmpTunnel(), 5000);
+      }
     });
+
+    proc.on('error', (err) => {
+      tunnelState.active = false;
+      tunnelState.status = 'unavailable';
+      addLog('WARN', `SSH tunnel unavailable (${err.message}). Direct VPS IP port ${rtmpPort} remains active.`, 'TUNNEL');
+      io.emit('tunnel-update', tunnelState);
+    });
+  } catch (_) {
+    tunnelState.status = 'unavailable';
+  }
+}
+
+startRtmpTunnel();
+
+app.get('/api/tunnel', (req, res) => {
+  res.json(tunnelState);
+});
+
+app.post('/api/tunnel/restart', (req, res) => {
+  startRtmpTunnel();
+  res.json({ success: true, tunnelState });
+});
+
+app.get('/api/flv-proxy/:streamName', (req, res) => {
+  const { streamName } = req.params;
+  const targetUrl = `http://127.0.0.1:${httpPort}/live/${streamName}.flv`;
+
+  const proxyReq = http.get(targetUrl, (proxyRes) => {
+    if (proxyRes.statusCode !== 200) {
+      res.status(proxyRes.statusCode || 404).end();
+      return;
+    }
+    res.setHeader('Content-Type', 'video/x-flv');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Access-Control-Allow-Origin', '*');
     proxyRes.pipe(res);
   });
 
@@ -704,317 +1044,74 @@ app.get('/api/flv-proxy/:streamName', (req, res) => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 7. Simultaneous Dual 16:9 & 9:16 Playout Engine
-// ---------------------------------------------------------------------------
-function buildRatioOutputArgs(inst, ratio) {
-  const destinations = [];
-  const suffix = ratio === '9:16' ? '916_preview' : '169_preview';
+app.get('/api/files', (req, res) => {
+  res.json(listUploadedFiles());
+});
 
-  // Internal low-latency preview stream
-  destinations.push(`[f=flv:onfail=ignore]rtmp://127.0.0.1:${rtmpPort}/live/${inst.streamKey}_${suffix}`);
-
-  if (ratio === '16:9') {
-    if (inst.rtmp169Primary && inst.rtmp169Primary.trim().startsWith('rtmp')) {
-      destinations.push(`[f=flv:onfail=ignore]${inst.rtmp169Primary.trim()}`);
-    }
-    if (inst.rtmp169Backup && inst.rtmp169Backup.trim().startsWith('rtmp')) {
-      destinations.push(`[f=flv:onfail=ignore]${inst.rtmp169Backup.trim()}`);
-    }
-  } else {
-    if (inst.rtmp916Primary && inst.rtmp916Primary.trim().startsWith('rtmp')) {
-      destinations.push(`[f=flv:onfail=ignore]${inst.rtmp916Primary.trim()}`);
-    }
-    if (inst.rtmp916Backup && inst.rtmp916Backup.trim().startsWith('rtmp')) {
-      destinations.push(`[f=flv:onfail=ignore]${inst.rtmp916Backup.trim()}`);
-    }
+app.post('/api/files/upload', upload.single('file'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file selected for upload' });
   }
+  addLog('INFO', `Uploaded file "${req.file.originalname}" (${Math.round(req.file.size / 1024)} KB)`, 'FILES');
+  const files = listUploadedFiles();
+  io.emit('files-update', files);
+  const created = files.find((f) => f.filename === req.file.filename);
+  res.json({ success: true, file: created, files });
+});
 
-  return ['-f', 'tee', '-map', '0:v', '-map', '0:a?', destinations.join('|')];
-}
+app.get('/api/files/:id/download', (req, res) => {
+  const safeName = path.basename(req.params.id);
+  const fullPath = path.join(UPLOADS_DIR, safeName);
+  if (!fs.existsSync(fullPath)) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+  const downloadName = safeName.replace(/^\d+_/, '');
+  res.download(fullPath, downloadName);
+});
 
-function stopInstanceProcesses(inst) {
-  ['proc169', 'proc916'].forEach((key) => {
-    if (inst[key]) {
-      try {
-        if (inst[key].stdin) inst[key].stdin.end();
-      } catch (_) {}
-      try {
-        inst[key].kill('SIGTERM');
-      } catch (_) {}
-      inst[key] = null;
-    }
-  });
-  inst.usingBrowserPipe = false;
-}
+app.put('/api/files/:id', (req, res) => {
+  const safeName = path.basename(req.params.id);
+  const fullPath = path.join(UPLOADS_DIR, safeName);
+  if (!fs.existsSync(fullPath)) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+  const ext = path.extname(safeName);
+  const cleanTitle = String(req.body.newName || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
+  const prefix = (safeName.match(/^\d+_/) || [`${Date.now()}_`])[0];
+  const finalFilename = cleanTitle.endsWith(ext) ? `${prefix}${cleanTitle}` : `${prefix}${cleanTitle}${ext}`;
+  const newFullPath = path.join(UPLOADS_DIR, finalFilename);
 
-function attachProcessLogger(proc, label) {
-  let lastStatTime = 0;
-  proc.stderr.on('data', (d) => {
-    const lines = d.toString().split('\n');
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      if (trimmed.includes('frame=') || trimmed.includes('fps=') || trimmed.includes('bitrate=')) {
-        const now = Date.now();
-        if (now - lastStatTime > 5000) {
-          lastStatTime = now;
-          addLog('FFMPEG', `[${label}] ${trimmed}`, 'FFMPEG');
+  fs.renameSync(fullPath, newFullPath);
+
+  for (const inst of instances.values()) {
+    inst.scenes.forEach((sc) => {
+      sc.sources.forEach((src) => {
+        if (src.fileId === safeName) {
+          src.fileId = finalFilename;
+          src.url = `/uploads/${encodeURIComponent(finalFilename)}`;
         }
-      } else if (
-        trimmed.toLowerCase().includes('error') ||
-        trimmed.toLowerCase().includes('failed')
-      ) {
-        addLog('ERROR', `[${label}] ${trimmed}`, 'FFMPEG');
-      }
-    }
-  });
-}
-
-function spawnRatioBackendProcess(inst, ratio) {
-  const is916 = ratio === '9:16';
-  const W = is916 ? 1080 : 1920;
-  const H = is916 ? 1920 : 1080;
-  const fallbackVideo = is916 ? FALLBACK_9_16 : FALLBACK_16_9;
-  const outArgs = buildRatioOutputArgs(inst, ratio);
-
-  if (inst.mode === 'playlist-loop') {
-    const playlistFile = path.join(MEDIA_DIR, `playlist_${inst.id}.txt`);
-    const validUrls = (inst.playlistUrls || []).filter((u) => u && u.trim());
-    if (validUrls.length === 0) validUrls.push(fallbackVideo);
-
-    const content = validUrls
-      .map((u) => {
-        const clean = u.trim();
-        if (clean.startsWith('/uploads/')) {
-          return `file '${path.join(UPLOADS_DIR, decodeURIComponent(clean.replace('/uploads/', '')))}'`;
-        }
-        return `file '${clean}'`;
-      })
-      .join('\n');
-    fs.writeFileSync(playlistFile, content, 'utf-8');
-
-    const scaleFilter = `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:#8fd3fe,setsar=1`;
-
-    return spawn('ffmpeg', [
-      '-re',
-      '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
-      '-f', 'concat',
-      '-safe', '0',
-      '-stream_loop', '-1',
-      '-i', playlistFile,
-      '-vf', scaleFilter,
-      '-c:v', 'libx264',
-      '-preset', 'veryfast',
-      '-b:v', '3200k',
-      '-maxrate', '3800k',
-      '-bufsize', '7000k',
-      '-pix_fmt', 'yuv420p',
-      '-g', '60',
-      '-c:a', 'aac',
-      '-b:a', '128k',
-      '-ar', '44100',
-      ...outArgs
-    ]);
+      });
+    });
   }
-
-  // Mode: 'window-voiceover-dual'
-  const activeScene = getActiveScene(inst);
-  const sources = (activeScene && activeScene.sources) || [];
-  const rectKey = is916 ? 'rect916' : 'rect169';
-
-  // Determine primary visual input for this scene
-  const liveWinSrc = sources.find((s) => s.type === 'live-window' && s.visible !== false && (!s[rectKey] || s[rectKey].visible !== false));
-  const videoSrc = sources.find((s) => s.type === 'video' && s.fileUrl && s.visible !== false);
-  const audioSrc = sources.find((s) => s.type === 'audio' && s.fileUrl && s.visible !== false);
-  const textSrc = sources.find((s) => s.type === 'text' && s.text && s.visible !== false);
-
-  let videoInputArgs = [];
-  if (activeScene && activeScene.type !== 'network-error' && liveWinSrc && inst.isPublishing) {
-    const localRtmpUrl = `rtmp://127.0.0.1:${rtmpPort}/live/${inst.streamKey}`;
-    videoInputArgs = ['-re', '-i', localRtmpUrl];
-  } else if (videoSrc && videoSrc.fileUrl) {
-    const resolvedVideo = videoSrc.fileUrl.startsWith('/uploads/')
-      ? path.join(UPLOADS_DIR, decodeURIComponent(videoSrc.fileUrl.replace('/uploads/', '')))
-      : videoSrc.fileUrl;
-    if (fs.existsSync(resolvedVideo) || resolvedVideo.startsWith('http')) {
-      videoInputArgs = ['-re', '-stream_loop', '-1', '-i', resolvedVideo];
-    }
-  }
-
-  if (videoInputArgs.length === 0) {
-    videoInputArgs = ['-re', '-stream_loop', '-1', '-i', fallbackVideo];
-  }
-
-  // Optional Scene Background Music input from Cloud File System
-  let audioInputArgs = [];
-  let hasExternalAudio = false;
-  if (audioSrc && audioSrc.fileUrl) {
-    const resolvedAudio = audioSrc.fileUrl.startsWith('/uploads/')
-      ? path.join(UPLOADS_DIR, decodeURIComponent(audioSrc.fileUrl.replace('/uploads/', '')))
-      : audioSrc.fileUrl;
-    if (fs.existsSync(resolvedAudio)) {
-      audioInputArgs = ['-stream_loop', '-1', '-i', resolvedAudio];
-      hasExternalAudio = true;
-    }
-  }
-
-  // Video filter with aspect scaling & optional text banner
-  let vf = `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:#8fd3fe,setsar=1`;
-  if (textSrc && textSrc.text) {
-    const safeText = String(textSrc.text).replace(/[:']/g, '');
-    const r = textSrc[rectKey] || { x: 80, y: 80 };
-    vf += `,drawtext=text='${safeText}':fontcolor=white:fontsize=${textSrc.fontSize || 44}:box=1:boxcolor=#2b7de9@0.8:boxborderw=16:x=${Math.max(10, r.x || 60)}:y=${Math.max(10, r.y || 60)}`;
-  }
-
-  const mapArgs = hasExternalAudio
-    ? ['-map', '0:v', '-map', '1:a']
-    : ['-map', '0:v', '-map', '0:a?'];
-
-  const teeDest = buildRatioOutputArgs(inst, ratio).slice(-1)[0];
-
-  return spawn('ffmpeg', [
-    ...videoInputArgs,
-    ...audioInputArgs,
-    '-vf', vf,
-    '-c:v', 'libx264',
-    '-preset', 'veryfast',
-    '-tune', 'zerolatency',
-    '-b:v', '3200k',
-    '-maxrate', '3800k',
-    '-bufsize', '7000k',
-    '-pix_fmt', 'yuv420p',
-    '-g', '60',
-    '-c:a', 'aac',
-    '-b:a', '128k',
-    '-ar', '44100',
-    '-f', 'tee',
-    ...mapArgs,
-    teeDest
-  ]);
-}
-
-function startDualBackendPlayout(inst) {
-  stopInstanceProcesses(inst);
-  inst.status = 'live';
-  inst.usingBrowserPipe = false;
-  if (!inst.uptimeStart) inst.uptimeStart = Date.now();
-
-  // If in window-voiceover-dual mode and OBS is not yet publishing, auto-select network-error scene
-  if (inst.mode === 'window-voiceover-dual' && inst.autoSceneSwitch && !inst.isPublishing) {
-    const netScene = getSceneByType(inst, 'network-error');
-    if (netScene) inst.activeSceneId = netScene.id;
-  }
-
-  addLog(
-    'INFO',
-    `[${inst.name}] Starting Simultaneous Dual Playout (16:9 + 9:16) | Active Scene: "${getActiveScene(inst)?.name}"`,
-    'PLAYOUT'
-  );
-
-  inst.proc169 = spawnRatioBackendProcess(inst, '16:9');
-  inst.proc916 = spawnRatioBackendProcess(inst, '9:16');
-
-  if (inst.proc169) attachProcessLogger(inst.proc169, `${inst.name} 16:9`);
-  if (inst.proc916) attachProcessLogger(inst.proc916, `${inst.name} 9:16`);
-
+  saveInstancesToDisk();
+  const files = listUploadedFiles();
+  io.emit('files-update', files);
   broadcastInstanceStatus();
-}
+  res.json({ success: true, files });
+});
 
-function startDualBrowserPipePlayout(inst) {
-  stopInstanceProcesses(inst);
-  inst.status = 'live';
-  inst.usingBrowserPipe = true;
-  if (!inst.uptimeStart) inst.uptimeStart = Date.now();
-
-  addLog('INFO', `[${inst.name}] Starting Dual Studio Live Pipe (16:9 + 9:16 Simultaneous)...`, 'STUDIO');
-
-  const out169 = buildRatioOutputArgs(inst, '16:9');
-  const out916 = buildRatioOutputArgs(inst, '9:16');
-
-  inst.proc169 = spawn('ffmpeg', [
-    '-re',
-    '-f', 'webm',
-    '-probesize', '5M',
-    '-analyzeduration', '3M',
-    '-i', 'pipe:0',
-    '-c:v', 'libx264',
-    '-preset', 'veryfast',
-    '-tune', 'zerolatency',
-    '-b:v', '3500k',
-    '-maxrate', '4000k',
-    '-bufsize', '8000k',
-    '-pix_fmt', 'yuv420p',
-    '-g', '60',
-    '-c:a', 'aac',
-    '-b:a', '128k',
-    '-ar', '44100',
-    ...out169
-  ]);
-
-  inst.proc916 = spawn('ffmpeg', [
-    '-re',
-    '-f', 'webm',
-    '-probesize', '5M',
-    '-analyzeduration', '3M',
-    '-i', 'pipe:0',
-    '-c:v', 'libx264',
-    '-preset', 'veryfast',
-    '-tune', 'zerolatency',
-    '-b:v', '3200k',
-    '-maxrate', '3800k',
-    '-bufsize', '7000k',
-    '-pix_fmt', 'yuv420p',
-    '-g', '60',
-    '-c:a', 'aac',
-    '-b:a', '128k',
-    '-ar', '44100',
-    ...out916
-  ]);
-
-  if (inst.proc169) {
-    inst.proc169.stdin.on('error', () => {});
-    attachProcessLogger(inst.proc169, `${inst.name} Studio 16:9`);
+app.delete('/api/files/:id', (req, res) => {
+  const safeName = path.basename(req.params.id);
+  const fullPath = path.join(UPLOADS_DIR, safeName);
+  if (fs.existsSync(fullPath)) {
+    fs.unlinkSync(fullPath);
+    addLog('WARN', `Deleted cloud file: ${safeName}`, 'FILES');
   }
-  if (inst.proc916) {
-    inst.proc916.stdin.on('error', () => {});
-    attachProcessLogger(inst.proc916, `${inst.name} Studio 9:16`);
-  }
+  const files = listUploadedFiles();
+  io.emit('files-update', files);
+  res.json({ success: true, files });
+});
 
-  broadcastInstanceStatus();
-}
-
-function serializeInstance(inst) {
-  const uptime = inst.uptimeStart ? Math.floor((Date.now() - inst.uptimeStart) / 1000) : 0;
-  return {
-    id: inst.id,
-    name: inst.name,
-    streamKey: inst.streamKey,
-    mode: inst.mode,
-    rtmp169Primary: inst.rtmp169Primary,
-    rtmp169Backup: inst.rtmp169Backup,
-    rtmp916Primary: inst.rtmp916Primary,
-    rtmp916Backup: inst.rtmp916Backup,
-    playlistUrls: inst.playlistUrls,
-    scenes: inst.scenes,
-    activeSceneId: inst.activeSceneId,
-    autoSceneSwitch: inst.autoSceneSwitch,
-    status: inst.status,
-    isPublishing: inst.isPublishing,
-    detectedColorHex: inst.detectedColorHex,
-    usingBrowserPipe: inst.usingBrowserPipe,
-    uptime
-  };
-}
-
-function broadcastInstanceStatus() {
-  const payload = Array.from(instances.values()).map(serializeInstance);
-  io.emit('instances-update', payload);
-}
-
-// ---------------------------------------------------------------------------
-// 8. REST API Endpoints
-// ---------------------------------------------------------------------------
 app.get('/api/instances', (req, res) => {
   res.json(Array.from(instances.values()).map(serializeInstance));
 });
@@ -1022,46 +1119,52 @@ app.get('/api/instances', (req, res) => {
 app.post('/api/instances', (req, res) => {
   const {
     name,
-    mode,
-    rtmp169Primary,
-    rtmp169Backup,
-    rtmp916Primary,
-    rtmp916Backup,
-    playlistUrls
+    rtmpIngestKey,
+    rtmpUrl169,
+    streamKey169,
+    enable169,
+    rtmpUrl916,
+    streamKey916,
+    enable916,
+    fps,
+    bitrate,
+    autoSceneSwitch
   } = req.body;
 
-  const id = 'inst_' + Date.now();
-  const streamKey = 'live_' + Math.random().toString(36).substring(2, 8);
-  const scenes = createDefaultScenes();
+  const id = 'inst_' + Date.now().toString(36);
+  const defaultScenes = createDefaultScenes();
 
   const newInst = {
     id,
-    name: name || 'Sky Dual Stream ' + (instances.size + 1),
-    streamKey,
-    mode: mode === 'playlist-loop' ? 'playlist-loop' : 'window-voiceover-dual',
-    rtmp169Primary: rtmp169Primary || '',
-    rtmp169Backup: rtmp169Backup || '',
-    rtmp916Primary: rtmp916Primary || '',
-    rtmp916Backup: rtmp916Backup || '',
-    playlistUrls: playlistUrls || [],
-    scenes,
-    activeSceneId: scenes[0].id,
-    autoSceneSwitch: true,
+    name: name || 'Dual Live Channel (16:9 + 9:16)',
+    mode: 'window-voiceover-dual',
+    rtmpIngestKey: (rtmpIngestKey || 'live_' + Math.random().toString(36).substr(2, 5)).trim(),
+    rtmpUrl169: rtmpUrl169 || 'rtmp://a.rtmp.youtube.com/live2',
+    streamKey169: streamKey169 || '',
+    enable169: enable169 !== undefined ? Boolean(enable169) : true,
+    rtmpUrl916: rtmpUrl916 || 'rtmp://a.rtmp.youtube.com/live2',
+    streamKey916: streamKey916 || '',
+    enable916: enable916 !== undefined ? Boolean(enable916) : true,
+    fps: Number(fps) || 30,
+    bitrate: Number(bitrate) || 2500,
+    autoSceneSwitch: autoSceneSwitch !== undefined ? Boolean(autoSceneSwitch) : true,
+    activeSceneId: defaultScenes[0].id,
+    scenes: defaultScenes,
     status: 'offline',
+    obsConnected: false,
+    detectedScreenColor: null,
+    lastSwitchReason: 'Created',
     uptimeStart: null,
-    isPublishing: false,
-    detectedColorHex: null,
     proc169: null,
     proc916: null,
-    colorProbeProc: null,
-    usingBrowserPipe: false
+    colorDetectorProc: null
   };
 
   instances.set(id, newInst);
   saveInstancesToDisk();
   broadcastInstanceStatus();
-  addLog('INFO', `Created Dual Playout instance: "${newInst.name}"`, 'API');
-  res.status(201).json(serializeInstance(newInst));
+  addLog('INFO', `Created Dual Playout Instance: "${newInst.name}"`, 'API');
+  res.json(serializeInstance(newInst));
 });
 
 app.put('/api/instances/:id', (req, res) => {
@@ -1070,82 +1173,56 @@ app.put('/api/instances/:id', (req, res) => {
 
   const {
     name,
-    mode,
-    rtmp169Primary,
-    rtmp169Backup,
-    rtmp916Primary,
-    rtmp916Backup,
-    playlistUrls,
-    scenes,
+    rtmpIngestKey,
+    rtmpUrl169,
+    streamKey169,
+    enable169,
+    rtmpUrl916,
+    streamKey916,
+    enable916,
+    fps,
+    bitrate,
+    autoSceneSwitch,
     activeSceneId,
-    autoSceneSwitch
+    scenes
   } = req.body;
 
   if (name !== undefined) inst.name = name;
-  if (mode !== undefined) inst.mode = mode;
-  if (rtmp169Primary !== undefined) inst.rtmp169Primary = rtmp169Primary;
-  if (rtmp169Backup !== undefined) inst.rtmp169Backup = rtmp169Backup;
-  if (rtmp916Primary !== undefined) inst.rtmp916Primary = rtmp916Primary;
-  if (rtmp916Backup !== undefined) inst.rtmp916Backup = rtmp916Backup;
-  if (playlistUrls !== undefined) inst.playlistUrls = playlistUrls;
-  if (scenes !== undefined) inst.scenes = scenes;
-  if (activeSceneId !== undefined) inst.activeSceneId = activeSceneId;
+  if (rtmpIngestKey !== undefined) inst.rtmpIngestKey = rtmpIngestKey.trim();
+  if (rtmpUrl169 !== undefined) inst.rtmpUrl169 = rtmpUrl169.trim();
+  if (streamKey169 !== undefined) inst.streamKey169 = streamKey169.trim();
+  if (enable169 !== undefined) inst.enable169 = Boolean(enable169);
+  if (rtmpUrl916 !== undefined) inst.rtmpUrl916 = rtmpUrl916.trim();
+  if (streamKey916 !== undefined) inst.streamKey916 = streamKey916.trim();
+  if (enable916 !== undefined) inst.enable916 = Boolean(enable916);
+  if (fps !== undefined) inst.fps = Number(fps);
+  if (bitrate !== undefined) inst.bitrate = Number(bitrate);
   if (autoSceneSwitch !== undefined) inst.autoSceneSwitch = Boolean(autoSceneSwitch);
+
+  if (Array.isArray(scenes)) {
+    inst.scenes = normalizeScenes(scenes);
+  }
+  if (activeSceneId && inst.scenes.some((s) => s.id === activeSceneId)) {
+    inst.activeSceneId = activeSceneId;
+  } else if (!inst.scenes.some((s) => s.id === inst.activeSceneId)) {
+    inst.activeSceneId = inst.scenes[0].id;
+  }
 
   saveInstancesToDisk();
   broadcastInstanceStatus();
   res.json(serializeInstance(inst));
 });
 
-// Save Scenes & Dual Ratio Sources Layout
-app.put('/api/instances/:id/scenes', (req, res) => {
+app.post('/api/instances/:id/scene-switch', (req, res) => {
   const inst = instances.get(req.params.id);
   if (!inst) return res.status(404).json({ error: 'Instance not found' });
 
-  const { scenes, activeSceneId, autoSceneSwitch } = req.body;
-  if (!Array.isArray(scenes)) {
-    return res.status(400).json({ error: 'Scenes array is required' });
-  }
-
-  // Enforce maximum 1 'default' scene rule
-  let seenDefault = false;
-  scenes.forEach((sc) => {
-    if (sc.type === 'default') {
-      if (seenDefault) {
-        sc.type = 'color-detect';
-      } else {
-        seenDefault = true;
-      }
-    }
-  });
-
-  inst.scenes = scenes;
-  if (activeSceneId) inst.activeSceneId = activeSceneId;
-  if (autoSceneSwitch !== undefined) inst.autoSceneSwitch = Boolean(autoSceneSwitch);
-
-  saveInstancesToDisk();
-  broadcastInstanceStatus();
-  res.json({ success: true, scenes: inst.scenes, activeSceneId: inst.activeSceneId });
-});
-
-// Switch Active Scene (Live or Offline)
-app.post('/api/instances/:id/switch-scene', (req, res) => {
-  const inst = instances.get(req.params.id);
-  if (!inst) return res.status(404).json({ error: 'Instance not found' });
-
-  const { sceneId, reason, autoSceneSwitch } = req.body;
-  if (autoSceneSwitch !== undefined) {
-    inst.autoSceneSwitch = Boolean(autoSceneSwitch);
-  }
-  if (sceneId) {
-    switchInstanceScene(inst, sceneId, reason || 'MANUAL USER SWITCH');
-  }
-  saveInstancesToDisk();
-  broadcastInstanceStatus();
+  const { sceneId, reason } = req.body;
+  const switched = switchInstanceScene(inst, sceneId, reason || 'Manual User Switch');
   res.json({
-    success: true,
+    success: switched,
     activeSceneId: inst.activeSceneId,
-    autoSceneSwitch: inst.autoSceneSwitch
+    instance: serializeInstance(inst)
   });
 });
 
@@ -1154,7 +1231,7 @@ app.delete('/api/instances/:id', (req, res) => {
   if (!inst) return res.status(404).json({ error: 'Instance not found' });
 
   stopInstanceProcesses(inst);
-  stopColorProbe(inst);
+  stopBackendColorDetector(inst);
   instances.delete(req.params.id);
   saveInstancesToDisk();
   broadcastInstanceStatus();
@@ -1162,7 +1239,6 @@ app.delete('/api/instances/:id', (req, res) => {
   res.json({ success: true });
 });
 
-// Start Autonomous Backend Dual Playout
 app.post('/api/instances/:id/start', (req, res) => {
   const inst = instances.get(req.params.id);
   if (!inst) return res.status(404).json({ error: 'Instance not found' });
@@ -1175,7 +1251,6 @@ app.post('/api/instances/:id/start', (req, res) => {
   }
 });
 
-// Start Dual Studio Browser Pipe (16:9 + 9:16 Simultaneous Canvas Stream)
 app.post('/api/instances/:id/start-dual-canvas', (req, res) => {
   const inst = instances.get(req.params.id);
   if (!inst) return res.status(404).json({ error: 'Instance not found' });
@@ -1200,9 +1275,6 @@ app.post('/api/instances/:id/stop', (req, res) => {
   res.json({ success: true });
 });
 
-// ---------------------------------------------------------------------------
-// 9. Real-Time Logs & System Status Endpoints
-// ---------------------------------------------------------------------------
 app.get('/api/logs', (req, res) => {
   const { level, search, limit } = req.query;
   let filtered = [...LOGS_BUFFER];
@@ -1218,7 +1290,7 @@ app.get('/api/logs', (req, res) => {
     );
   }
 
-  const max = parseInt(limit, 10) || 300;
+  const max = parseInt(limit, 10) || 150;
   res.json({
     total: LOGS_BUFFER.length,
     returned: Math.min(filtered.length, max),
@@ -1255,6 +1327,7 @@ app.get('/api/system/status', (req, res) => {
     activeInstances: instances.size,
     activePlayouts: activeProcesses,
     storedFilesCount: listUploadedFiles().length,
+    tunnel: tunnelState,
     ports: {
       http: PORT,
       rtmp: rtmpPort,
@@ -1263,15 +1336,12 @@ app.get('/api/system/status', (req, res) => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 10. WebSocket Handlers (Dual 16:9 + 9:16 Binary Chunks & Color Auto-Switch)
-// ---------------------------------------------------------------------------
 io.on('connection', (socket) => {
   socket.emit('instances-update', Array.from(instances.values()).map(serializeInstance));
-  socket.emit('logs:history', LOGS_BUFFER.slice(-150));
+  socket.emit('logs:history', LOGS_BUFFER.slice(-100));
   socket.emit('files-update', listUploadedFiles());
+  socket.emit('tunnel-update', tunnelState);
 
-  // 16:9 Canvas Live Stream Chunk
   socket.on('binary-chunk-169', ({ instanceId, chunk }) => {
     const inst = instances.get(instanceId);
     if (inst && inst.proc169 && inst.proc169.stdin && inst.proc169.stdin.writable) {
@@ -1281,7 +1351,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // 9:16 Vertical Canvas Live Stream Chunk
   socket.on('binary-chunk-916', ({ instanceId, chunk }) => {
     const inst = instances.get(instanceId);
     if (inst && inst.proc916 && inst.proc916.stdin && inst.proc916.stdin.writable) {
@@ -1291,7 +1360,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Client-Side Color Detector Auto-Switch Trigger
   socket.on('client-color-switch', ({ instanceId, targetSceneId, reason }) => {
     const inst = instances.get(instanceId);
     if (inst && inst.autoSceneSwitch) {
@@ -1300,9 +1368,6 @@ io.on('connection', (socket) => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 11. Server Boot
-// ---------------------------------------------------------------------------
 server.listen(PORT, '0.0.0.0', () => {
   addLog('INFO', `Sky Playout Server listening on port ${PORT}`, 'BOOT');
   addLog('INFO', `RTMP Ingest Server listening on port ${rtmpPort}`, 'BOOT');
@@ -1318,7 +1383,7 @@ server.listen(PORT, '0.0.0.0', () => {
   if (codespaceUrl) {
     origLog(`  Codespaces Web UI:  ${codespaceUrl}`);
   }
-  origLog(`  RTMP Ingest Port:   ${rtmpPort} (rtmp://<vps-ip>:${rtmpPort}/live)`);
+  origLog(`  RTMP Ingest Port:   ${rtmpPort}`);
   origLog(`  HTTP-FLV Port:      ${httpPort}`);
   origLog('================================================================');
 });

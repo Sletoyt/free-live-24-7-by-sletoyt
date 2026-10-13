@@ -1,9 +1,3 @@
-/**
- * RTMP Server Configuration Module (Node-Media-Server)
- * Project: free-live-24-7-by-sletoyt
- * Handles high-concurrency RTMP ingestion and HTTP-FLV preview endpoints.
- */
-
 const NodeMediaServer = require('node-media-server');
 const path = require('path');
 
@@ -13,9 +7,10 @@ function initializeRtmpServer(customConfig = {}) {
   const mediaRoot = customConfig.mediaRoot || path.join(__dirname, 'media');
 
   const config = {
+    logType: 1,
     rtmp: {
       port: rtmpPort,
-      chunk_size: 60000,
+      chunk_size: 40960,
       gop_cache: true,
       ping: 30,
       ping_timeout: 60
