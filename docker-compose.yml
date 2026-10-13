@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  free-live-stream:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: free-live-24-7-by-sletoyt
+    restart: unless-stopped
+    ports:
+      - "3000:3000"   # Cute Sky Web Dashboard, Cloud File System & Socket.IO
+      - "1935:1935"   # RTMP Ingest from Local PC OBS (Window + Voiceover)
+      - "8000:8000"   # HTTP-FLV & HLS Playout Preview
+    volumes:
+      - ./data:/app/data
+      - ./assets:/app/assets
+      - ./media:/app/media
+      - ./uploads:/app/uploads
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      - RTMP_PORT=1935
+      - HTTP_PORT=8000
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "25m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 4096M

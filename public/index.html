@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>free-live-24-7-by-sletoyt | Cute Sky Dual 16:9 & 9:16 Playout Studio</title>
+
+  <!-- Cute Rounded Bubbly Fonts (Fredoka + Quicksand + JetBrains Mono) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Quicksand:wght@500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="style.css">
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/flv.js@1.6.2/dist/flv.min.js"></script>
+</head>
+<body class="sky-kawaii-theme">
+
+  <!-- Cute Floating Kawaii Sky Background Decorations -->
+  <div class="sky-decorations" aria-hidden="true">
+    <div class="kawaii-cloud cloud-1">
+      <div class="cloud-face"><span>•</span><span class="blush"></span><span class="mouth">◡</span><span class="blush"></span><span>•</span></div>
+    </div>
+    <div class="kawaii-cloud cloud-2">
+      <div class="cloud-face"><span>•</span><span class="blush"></span><span class="mouth">◡</span><span class="blush"></span><span>•</span></div>
+    </div>
+    <div class="kawaii-cloud cloud-3">
+      <div class="cloud-face"><span>•</span><span class="blush"></span><span class="mouth">◡</span><span class="blush"></span><span>•</span></div>
+    </div>
+    <div class="sakura-petal petal-1">🌸</div>
+    <div class="sakura-petal petal-2">🌸</div>
+    <div class="sakura-petal petal-3">✨</div>
+    <div class="sakura-petal petal-4">🌸</div>
+  </div>
+
+  <!-- Top Cute Sky Header Bar -->
+  <header class="sky-header">
+    <div class="header-left">
+      <div class="brand-logo">
+        <div class="brand-cloud-badge">☁️🌸</div>
+        <div class="brand-titles">
+          <div class="brand-name">
+            <span>free-live-24-7</span>
+            <span class="badge-sleto">by sletoyt</span>
+          </div>
+          <span class="brand-sub">Dual 16:9 & 9:16 Auto-Color Scene Playout Studio</span>
+        </div>
+      </div>
+
+      <!-- Main Navigation Pills -->
+      <nav class="nav-tabs">
+        <button class="nav-tab active" data-tab="tab-streams" id="btnTabStreams">
+          <span>📺 Dual Streams</span>
+          <span class="tab-counter" id="activeStreamsCounter">0</span>
+        </button>
+
+        <button class="nav-tab" data-tab="tab-files" id="btnTabFiles">
+          <span>📁 File System (Music & Logos)</span>
+          <span class="tab-counter" id="filesCounterBadge">0</span>
+        </button>
+
+        <button class="nav-tab" data-tab="tab-logs" id="btnTabLogs">
+          <span>📋 Live Logs</span>
+          <span class="pulse-dot"></span>
+        </button>
+
+        <button class="nav-tab" data-tab="tab-system" id="btnTabSystem">
+          <span>🌸 System Health</span>
+        </button>
+      </nav>
+    </div>
+
+    <div class="header-right">
+      <div class="sky-ip-chip">
+        <span class="chip-label">☁️ Server IP:</span>
+        <span class="chip-val" id="vpsIpDisplay">Detecting...</span>
+      </div>
+
+      <button class="btn btn-sakura" id="btnCreateInstanceModal">
+        <span>✨ + New Dual Stream</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Mobile Bottom Navigation Bar -->
+  <nav class="mobile-bottom-nav">
+    <button class="mobile-tab-btn active" data-tab="tab-streams">
+      <span>📺</span>
+      <span>Streams</span>
+    </button>
+    <button class="mobile-tab-btn" data-tab="tab-files">
+      <span>📁</span>
+      <span>Files</span>
+    </button>
+    <button class="mobile-tab-btn" data-tab="tab-logs">
+      <span>📋</span>
+      <span>Logs</span>
+    </button>
+    <button class="mobile-tab-btn" data-tab="tab-system">
+      <span>🌸</span>
+      <span>Health</span>
+    </button>
+  </nav>
+
+  <!-- Main Views Wrapper -->
+  <main class="main-content-wrapper">
+
+    <!-- ===================================================================== -->
+    <!-- VIEW 1: Dual Streams Dashboard                                        -->
+    <!-- ===================================================================== -->
+    <section class="tab-pane active" id="tab-streams">
+      <div class="view-banner">
+        <div class="banner-text">
+          <h1 class="view-title">☁️ Dual 16:9 + 9:16 Playout Channels 🌸</h1>
+          <p class="view-desc">Send your PC Window + Voiceover once from OBS — our tool automatically switches scenes on full-screen colors, handles network drops, and streams 16:9 & 9:16 simultaneously!</p>
+        </div>
+        <div class="banner-QuickActions">
+          <button class="btn btn-sky" onclick="document.getElementById('btnTabFiles').click()">📁 Upload BG Music & Logos</button>
+        </div>
+      </div>
+
+      <div class="instances-grid" id="instancesGrid">
+        <!-- Populated by app.js -->
+      </div>
+    </section>
+
+    <!-- ===================================================================== -->
+    <!-- VIEW 2: Cloud File System (BG Music, Logos, Video Loops)              -->
+    <!-- ===================================================================== -->
+    <section class="tab-pane" id="tab-files">
+      <div class="view-banner">
+        <div class="banner-text">
+          <h1 class="view-title">📁 Cloud Media File System (BG Music, Logos & Videos)</h1>
+          <p class="view-desc">Upload your background music (.mp3, .wav), stream logos (.png, .gif), and pause/starting video loops (.mp4). Easily use them in any scene or download them anytime!</p>
+        </div>
+        <div>
+          <button class="btn btn-sakura" id="btnTriggerFileUpload">☁️ + Upload Files</button>
+          <input type="file" id="globalFileInput" multiple accept="audio/*,video/*,image/*" style="display: none;">
+        </div>
+      </div>
+
+      <!-- Drag and Drop Upload Box -->
+      <div class="upload-dropzone" id="uploadDropzone">
+        <div class="dropzone-icon">☁️🎵🖼️🎬</div>
+        <h3>Drag & Drop BG Music, Logos, or Scene Videos Here</h3>
+        <p>Supports MP3, WAV, PNG, GIF, JPG, MP4, WEBM (Up to 1GB per file)</p>
+        <div class="upload-progress-wrap" id="uploadProgressWrap" style="display: none;">
+          <div class="upload-progress-bar" id="uploadProgressBar"></div>
+          <span id="uploadProgressText">Uploading...</span>
+        </div>
+      </div>
+
+      <!-- File Filter Bar -->
+      <div class="files-filter-bar">
+        <div class="filter-pills">
+          <button class="pill-filter active" data-cat="all">All Files</button>
+          <button class="pill-filter" data-cat="audio">🎵 BG Music / Audio</button>
+          <button class="pill-filter" data-cat="image">🖼️ Logos / Images</button>
+          <button class="pill-filter" data-cat="video">🎬 Videos / Loops</button>
+        </div>
+        <input type="text" id="fileSearchInput" class="sky-input" style="max-width: 280px;" placeholder="🔍 Search files...">
+      </div>
+
+      <!-- Files Grid -->
+      <div class="files-grid" id="filesGrid">
+        <!-- Populated by app.js -->
+      </div>
+    </section>
+
+    <!-- ===================================================================== -->
+    <!-- VIEW 3: Real-Time Live Logs                                           -->
+    <!-- ===================================================================== -->
+    <section class="tab-pane" id="tab-logs">
+      <div class="logs-console-card">
+        <div class="logs-toolbar">
+          <div class="logs-toolbar-left">
+            <div class="live-stream-badge">
+              <span class="dot-live"></span>
+              <span>LIVE LOGS</span>
+            </div>
+
+            <select id="logLevelSelect" class="sky-select">
+              <option value="ALL">All Levels</option>
+              <option value="SCENE">SCENE Switches</option>
+              <option value="INFO">INFO Only</option>
+              <option value="WARN">WARN Only</option>
+              <option value="ERROR">ERROR Only</option>
+              <option value="FFMPEG">FFMPEG Only</option>
+              <option value="RTMP">RTMP Only</option>
+            </select>
+
+            <input type="text" id="logSearchInput" class="sky-input" style="max-width: 280px;" placeholder="🔍 Filter logs...">
+          </div>
+
+          <div class="logs-toolbar-right">
+            <button class="btn btn-sm btn-sky-soft" id="btnToggleAutoScroll">
+              <span id="autoScrollStatus">Auto-Scroll: ON</span>
+            </button>
+            <button class="btn btn-sm btn-sky-soft" id="btnCopyLogs">📋 Copy</button>
+            <button class="btn btn-sm btn-sky-soft" id="btnDownloadLogs">⬇ Download</button>
+            <button class="btn btn-sm btn-danger-soft" id="btnClearLogs">🗑 Clear</button>
+          </div>
+        </div>
+
+        <div class="logs-terminal" id="logsTerminal">
+          <div class="terminal-lines" id="terminalLines"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================================================================== -->
+    <!-- VIEW 4: System Health                                                 -->
+    <!-- ===================================================================== -->
+    <section class="tab-pane" id="tab-system">
+      <div class="system-health-grid">
+        <div class="health-card">
+          <div class="card-headline">☁️ Server Platform</div>
+          <div class="health-metric-large" id="sysPlatform">Linux x64</div>
+          <div class="health-meta">Node.js Engine: <span id="sysNodeVer">v20.x</span></div>
+        </div>
+
+        <div class="health-card">
+          <div class="card-headline">🌸 Memory Usage</div>
+          <div class="health-metric-large"><span id="sysHeapUsed">--</span> <small>MB</small></div>
+          <div class="health-meta">RSS: <span id="sysRss">--</span> MB / System RAM: <span id="sysTotalRam">--</span> MB</div>
+        </div>
+
+        <div class="health-card">
+          <div class="card-headline">📺 Active Dual Streams</div>
+          <div class="health-metric-large" id="sysActivePlayouts">0</div>
+          <div class="health-meta">Stored Media Files: <span id="sysStoredFiles">0</span></div>
+        </div>
+
+        <div class="health-card">
+          <div class="card-headline">⏱️ Server Uptime</div>
+          <div class="health-metric-large" id="sysUptime">0h 0m</div>
+          <div class="health-meta">System Uptime: <span id="sysSystemUptime">0h 0m</span></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL 1: Create / Edit Dual Stream Instance                               -->
+  <!-- ========================================================================= -->
+  <div class="modal-backdrop" id="instanceModal" style="display: none;">
+    <div class="sky-modal">
+      <div class="modal-header">
+        <div>
+          <h2 id="modalTitle">✨ Configure Dual Playout Stream (16:9 + 9:16)</h2>
+          <p class="modal-sub">Setup Window + Voiceover Playout Mode & Separate 16:9 + 9:16 Stream Keys</p>
+        </div>
+        <button class="modal-close-btn" id="btnCloseInstanceModal">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <input type="hidden" id="instFormId">
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="instFormName">Stream Instance Name</label>
+            <input type="text" id="instFormName" class="sky-input" placeholder="e.g. Sletoyt Main Dual Live">
+          </div>
+
+          <div class="form-group">
+            <label for="instFormMode">Playout Source Mode</label>
+            <select id="instFormMode" class="sky-input">
+              <option value="window-voiceover-dual">🖥️ Window + Voiceover Auto Dual Playout (16:9 & 9:16 + Color Detect)</option>
+              <option value="playlist-loop">🔁 24/7 Multi-URL Video Playlist Loop (Dual 16:9 & 9:16)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 24/7 Playlist Group (Only shown if playlist-loop selected) -->
+        <div class="form-group" id="playlistGroup" style="display: none;">
+          <div class="group-title-row">
+            <label>24/7 Video Playlist Links (MP4 URLs or /uploads/filename.mp4)</label>
+            <button type="button" class="btn btn-xs btn-sky-soft" id="btnAddUrlRow">+ Add Video Link</button>
+          </div>
+          <div class="url-list-container" id="urlListContainer"></div>
+        </div>
+
+        <!-- Dual Simultaneous RTMP Destinations: 16:9 AND 9:16 -->
+        <div class="dual-keys-grid">
+          <!-- 16:9 Horizontal Stream Keys -->
+          <div class="ratio-key-box box-169">
+            <div class="box-header">
+              <span class="box-title">📺 16:9 Landscape Output Keys (1920x1080)</span>
+              <span class="badge-ratio">16:9 LIVE</span>
+            </div>
+            <div class="form-group">
+              <label>16:9 Primary RTMP URL + Stream Key</label>
+              <input type="text" id="instForm169Primary" class="sky-input" placeholder="rtmp://a.rtmp.youtube.com/live2/YOUR_16_9_KEY">
+            </div>
+            <div class="form-group">
+              <label>16:9 Unlisted Backup Key (Optional Cloud Archive)</label>
+              <input type="text" id="instForm169Backup" class="sky-input" placeholder="rtmp://a.rtmp.youtube.com/live2/UNLISTED_16_9_KEY">
+            </div>
+          </div>
+
+          <!-- 9:16 Vertical Shorts Stream Keys -->
+          <div class="ratio-key-box box-916">
+            <div class="box-header">
+              <span class="box-title">📱 9:16 Vertical Shorts Output Keys (1080x1920)</span>
+              <span class="badge-ratio badge-pink">9:16 SHORTS</span>
+            </div>
+            <div class="form-group">
+              <label>9:16 Primary Shorts RTMP URL + Stream Key</label>
+              <input type="text" id="instForm916Primary" class="sky-input" placeholder="rtmp://a.rtmp.youtube.com/live2/YOUR_9_16_SHORTS_KEY">
+            </div>
+            <div class="form-group">
+              <label>9:16 Unlisted Backup Key (Optional Cloud Archive)</label>
+              <input type="text" id="instForm916Backup" class="sky-input" placeholder="rtmp://a.rtmp.youtube.com/live2/UNLISTED_9_16_KEY">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-sky-soft" id="btnCancelInstanceModal">Cancel</button>
+        <button class="btn btn-sakura" id="btnSaveInstance">✨ Save Dual Stream Instance</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL 2: Dual Side-by-Side Scene Editor (16:9 + 9:16 Shown Together!)     -->
+  <!-- ========================================================================= -->
+  <div class="modal-backdrop" id="studioModal" style="display: none;">
+    <div class="sky-modal studio-modal-container">
+
+      <!-- Studio Top Header -->
+      <div class="studio-header">
+        <div class="studio-header-left">
+          <h2 id="studioInstanceName">☁️ Dual Scene Studio</h2>
+
+          <!-- Auto Color & Network Switcher Status Bar -->
+          <div class="auto-detect-bar">
+            <label class="toggle-switch-label" title="Automatically switch scenes on full-screen color or network drop">
+              <input type="checkbox" id="chkAutoSceneSwitch" checked>
+              <span>🤖 Auto Scene Switch</span>
+            </label>
+
+            <div class="color-detector-readout" title="Real-time dominant color detected on incoming Window/OBS feed">
+              <span>Screen Color:</span>
+              <span class="color-swatch-dot" id="detectedColorSwatch" style="background: #000000;"></span>
+              <code id="detectedColorCode">--</code>
+            </div>
+
+            <div class="obs-signal-pill" id="studioObsSignalPill">
+              📡 Waiting for OBS / Window
+            </div>
+          </div>
+        </div>
+
+        <div class="studio-header-right">
+          <button class="btn btn-sm btn-sky-soft" id="btnShareBrowserWindow" title="Optional: Send Window + Voiceover directly from browser">
+            🖥️ Share Browser Window + Mic
+          </button>
+          <button class="btn btn-sm btn-sky" id="btnSaveScenes">💾 Save All Scenes</button>
+          <span class="save-status-pill" id="saveStatusTag">✓ Saved</span>
+          <button class="modal-close-btn" id="btnCloseStudioModal">&times;</button>
+        </div>
+      </div>
+
+      <!-- Mobile Studio Tab Bar -->
+      <div class="studio-mobile-tab-bar">
+        <button class="studio-mob-tab active" data-panel="panel-canvases">📺 Dual Screens</button>
+        <button class="studio-mob-tab" data-panel="panel-scenes">🎬 Scenes & Sources</button>
+        <button class="studio-mob-tab" data-panel="panel-props">⚙ Coordinates</button>
+      </div>
+
+      <!-- Studio 3-Column Work Area -->
+      <div class="studio-work-area" id="studioWorkArea">
+
+        <!-- COLUMN 1: Scene Manager (3 Scene Types) & Shared Sources -->
+        <aside class="studio-left-panel">
+          <!-- SCENES SECTION -->
+          <div class="panel-section">
+            <div class="section-header-row">
+              <h3 class="panel-section-title">🎬 SCENES (SHARED 16:9 & 9:16)</h3>
+              <button class="btn btn-xs btn-sakura" id="btnOpenAddScene">+ Add Scene</button>
+            </div>
+            <p class="tiny-hint">Click any scene to switch both 16:9 & 9:16 live!</p>
+
+            <!-- Add Scene Mini Form -->
+            <div class="add-scene-box" id="addSceneBox" style="display: none;">
+              <div class="form-group">
+                <label>Scene Name</label>
+                <input type="text" id="newSceneName" class="sky-input-sm" placeholder="e.g. Pause Scene / Starting Soon">
+              </div>
+              <div class="form-group">
+                <label>Scene Type (3 Types)</label>
+                <select id="newSceneType" class="sky-input-sm">
+                  <option value="color-detect">🎨 2. Color-Detect Scene (Switch on Screen Color)</option>
+                  <option value="default">🟢 1. Default Scene (Max 1 - No Color Detected)</option>
+                  <option value="network-error">📡 3. Network Error Scene (When No OBS Signal)</option>
+                </select>
+              </div>
+              <div class="form-group" id="newSceneColorGroup">
+                <label>Full-Screen Trigger Color & Tolerance</label>
+                <div class="color-picker-row">
+                  <input type="color" id="newSceneTriggerColor" value="#000000">
+                  <input type="text" id="newSceneTriggerHex" class="sky-input-sm" value="#000000" style="width: 90px;">
+                  <button type="button" class="btn btn-xs btn-sky-soft" id="btnPickCurrentScreenColor" title="Use current detected screen color">Use Live Color</button>
+                </div>
+              </div>
+              <div class="add-scene-actions">
+                <button type="button" class="btn btn-xs btn-sky-soft" id="btnCancelAddScene">Cancel</button>
+                <button type="button" class="btn btn-xs btn-sakura" id="btnConfirmAddScene">Create Scene</button>
+              </div>
+            </div>
+
+            <!-- Scenes List -->
+            <div class="scenes-list" id="studioScenesList"></div>
+
+            <!-- Selected Scene Settings (Trigger Color Editor) -->
+            <div class="active-scene-config" id="activeSceneConfigBox"></div>
+          </div>
+
+          <!-- SHARED SOURCES SECTION -->
+          <div class="panel-section">
+            <h3 class="panel-section-title">🧩 SCENE SOURCES (SHARED)</h3>
+            <p class="tiny-hint">Sources added here appear in BOTH 16:9 & 9:16 — position them independently!</p>
+
+            <div class="source-buttons-grid">
+              <button class="btn btn-xs btn-source" id="btnAddLiveWindowSource">+ 🖥️ Window + Voiceover</button>
+              <button class="btn btn-xs btn-source" id="btnAddFileSource">+ 📁 From File System</button>
+              <button class="btn btn-xs btn-source" id="btnAddTextSource">+ 🔤 Cute Text Banner</button>
+              <button class="btn btn-xs btn-source" id="btnQuickUploadSource">+ ☁️ Upload New File</button>
+            </div>
+
+            <div class="layers-scroll-list" id="studioSourcesList"></div>
+          </div>
+        </aside>
+
+        <!-- COLUMN 2: DUAL SIDE-BY-SIDE EDITORS (16:9 AND 9:16 SHOWN TOGETHER!) -->
+        <section class="studio-center-panel">
+          <div class="dual-canvases-stage" id="dualCanvasesStage">
+
+            <!-- Left Monitor: 16:9 Landscape Canvas -->
+            <div class="canvas-monitor-card monitor-169">
+              <div class="monitor-header">
+                <span class="monitor-badge">📺 16:9 LANDSCAPE (1920x1080)</span>
+                <div class="monitor-quick-btns">
+                  <button class="btn btn-xs btn-sky-soft" id="btnFitSource169" title="Fit selected source to full 16:9 screen">⛶ Fit 16:9</button>
+                  <button class="btn btn-xs btn-sky-soft" id="btnCenterSource169" title="Center selected source on 16:9">🎯 Center</button>
+                </div>
+              </div>
+              <div class="single-canvas-viewport" id="viewport169">
+                <canvas id="canvas169" width="1920" height="1080"></canvas>
+              </div>
+            </div>
+
+            <!-- Right Monitor: 9:16 Vertical Shorts Canvas -->
+            <div class="canvas-monitor-card monitor-916">
+              <div class="monitor-header">
+                <span class="monitor-badge badge-pink">📱 9:16 VERTICAL SHORTS (1080x1920)</span>
+                <div class="monitor-quick-btns">
+                  <button class="btn btn-xs btn-sky-soft" id="btnFitSource916" title="Fit selected source to full 9:16 screen">⛶ Fit 9:16</button>
+                  <button class="btn btn-xs btn-sky-soft" id="btnCenterSource916" title="Center selected source on 9:16">🎯 Center</button>
+                </div>
+              </div>
+              <div class="single-canvas-viewport" id="viewport916">
+                <canvas id="canvas916" width="1080" height="1920"></canvas>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Bottom Broadcast Control Bar -->
+          <div class="studio-controls-bar">
+            <div class="controls-bar-left">
+              <span class="controls-label">Active Scene: <strong id="bottomActiveSceneName">--</strong></span>
+              <button class="btn btn-sm btn-sky-soft" id="studioMicToggle">🎙 Browser Mic: OFF</button>
+            </div>
+
+            <div class="controls-bar-right">
+              <button class="btn btn-sakura btn-push-live" id="studioGoLiveBtn">
+                <span class="live-dot-pulse"></span>
+                <span id="studioGoLiveText">🚀 START DUAL LIVE (16:9 + 9:16 SIMULTANEOUS)</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- COLUMN 3: Independent 16:9 & 9:16 Source Properties -->
+        <aside class="studio-right-panel">
+          <div class="panel-section">
+            <h3 class="panel-section-title">⚙ SOURCE COORDINATES (16:9 & 9:16)</h3>
+            <div id="studioPropertiesForm">
+              <p class="empty-panel-hint">Select any source to edit its independent 16:9 and 9:16 positions, volume, or style.</p>
+            </div>
+          </div>
+        </aside>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL 3: Cloud File System Picker (Select BG Music, Logo, or Video)       -->
+  <!-- ========================================================================= -->
+  <div class="modal-backdrop" id="filePickerModal" style="display: none; z-index: 1200;">
+    <div class="sky-modal" style="max-width: 680px;">
+      <div class="modal-header">
+        <div>
+          <h2>📁 Select Media from Cloud File System</h2>
+          <p class="modal-sub">Choose an uploaded BG Music track, Logo image, or Video loop to add to Both 16:9 & 9:16</p>
+        </div>
+        <button class="modal-close-btn" id="btnCloseFilePicker">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
+          <input type="text" id="pickerSearchInput" class="sky-input" placeholder="🔍 Search uploaded files...">
+          <button class="btn btn-sm btn-sakura" id="btnPickerUploadNew">☁️ + Upload New</button>
+        </div>
+        <div class="picker-files-list" id="pickerFilesList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL 4: Live Stream Preview Monitor                                      -->
+  <!-- ========================================================================= -->
+  <div class="modal-backdrop" id="previewModal" style="display: none;">
+    <div class="sky-modal preview-modal-wrap">
+      <div class="modal-header">
+        <div>
+          <h2 id="previewTitle">👁 Live Playout Monitor</h2>
+          <p class="modal-sub">Low-latency stream preview</p>
+        </div>
+        <button class="modal-close-btn" id="btnClosePreviewModal">&times;</button>
+      </div>
+      <div class="modal-body preview-modal-body">
+        <div class="player-aspect-box">
+          <video id="flvPreviewPlayer" controls autoplay muted playsinline></video>
+        </div>
+        <div class="player-info-strip">
+          <span class="player-status-badge" id="previewStatusText">Connecting...</span>
+          <button class="btn btn-sm btn-sky-soft" id="btnReloadPreview">↺ Reconnect</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
