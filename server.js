@@ -7,6 +7,7 @@ const { spawn } = require('child_process');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const multer = require('multer');
+const crypto = require('crypto');
 const { initializeRtmpServer } = require('./rtmp-config');
 
 const app = express();
@@ -39,9 +40,58 @@ const ASSETS_DIR = ensureWritableDir(path.join(__dirname, 'assets'), 'assets');
 const MEDIA_DIR = ensureWritableDir(path.join(__dirname, 'media'), 'media');
 const UPLOADS_DIR = ensureWritableDir(path.join(__dirname, 'uploads'), 'uploads');
 const INSTANCES_FILE = path.join(DATA_DIR, 'instances.json');
+const AUTH_FILE = path.join(DATA_DIR, 'auth.json');
 
 const FALLBACK_16_9 = path.join(ASSETS_DIR, 'fallback_16_9.mp4');
 const FALLBACK_9_16 = path.join(ASSETS_DIR, 'fallback_9_16.mp4');
+
+const activeSessions = new Map();
+
+function hashPassword(password, salt) {
+  return crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
+}
+
+function getAuthState() {
+  if (fs.existsSync(AUTH_FILE)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8'));
+      if (data && data.passwordHash && data.salt) {
+        return { configured: true, hash: data.passwordHash, salt: data.salt };
+      }
+    } catch (_) {}
+  }
+  if (process.env.ADMIN_PASSWORD && process.env.ADMIN_PASSWORD.trim()) {
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = hashPassword(process.env.ADMIN_PASSWORD.trim(), salt);
+    fs.writeFileSync(AUTH_FILE, JSON.stringify({ passwordHash: hash, salt, configured: true, updatedAt: new Date().toISOString() }, null, 2), 'utf8');
+    return { configured: true, hash, salt };
+  }
+  return { configured: false };
+}
+
+function isValidSession(token) {
+  if (!token) return false;
+  const sess = activeSessions.get(token);
+  if (!sess) return false;
+  if (Date.now() > sess.expiresAt) {
+    activeSessions.delete(token);
+    return false;
+  }
+  return true;
+}
+
+function requireAuth(req, res, next) {
+  const authState = getAuthState();
+  if (!authState.configured) {
+    return res.status(401).json({ error: 'Initial master password setup required', code: 'SETUP_REQUIRED' });
+  }
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim() || req.query.token;
+  if (token && isValidSession(token)) {
+    return next();
+  }
+  return res.status(401).json({ error: 'Master password login required', code: 'AUTH_REQUIRED' });
+}
 
 const LOGS_BUFFER = [];
 const MAX_LOGS = 200;
@@ -1088,6 +1138,66 @@ function startRtmpTunnel() {
 startRtmpTunnel();
 startWebTunnel();
 
+app.get('/api/auth/status', (req, res) => {
+  const authState = getAuthState();
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim() || req.query.token;
+  const authenticated = isValidSession(token);
+  res.json({
+    configured: authState.configured,
+    authenticated: authState.configured ? authenticated : false
+  });
+});
+
+app.post('/api/auth/setup', (req, res) => {
+  const authState = getAuthState();
+  if (authState.configured) {
+    return res.status(400).json({ error: 'Master password has already been configured.' });
+  }
+  const pwd = String(req.body.password || '').trim();
+  if (pwd.length < 4) {
+    return res.status(400).json({ error: 'Password must be at least 4 characters long.' });
+  }
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = hashPassword(pwd, salt);
+  fs.writeFileSync(
+    AUTH_FILE,
+    JSON.stringify({ passwordHash: hash, salt, configured: true, updatedAt: new Date().toISOString() }, null, 2),
+    'utf8'
+  );
+  const token = crypto.randomBytes(32).toString('hex');
+  activeSessions.set(token, { createdAt: Date.now(), expiresAt: Date.now() + 30 * 86400000 });
+  addLog('INFO', 'Master password created via Web Setup Wizard', 'AUTH');
+  res.json({ success: true, token });
+});
+
+app.post('/api/auth/login', (req, res) => {
+  const authState = getAuthState();
+  if (!authState.configured) {
+    return res.status(400).json({ error: 'Initial password setup required', code: 'SETUP_REQUIRED' });
+  }
+  const pwd = String(req.body.password || '').trim();
+  if (!pwd) {
+    return res.status(400).json({ error: 'Please enter master password.' });
+  }
+  const computed = hashPassword(pwd, authState.salt);
+  if (computed !== authState.hash) {
+    addLog('WARN', 'Failed login attempt: incorrect password', 'AUTH');
+    return res.status(401).json({ error: 'Incorrect master password. Access denied.' });
+  }
+  const token = crypto.randomBytes(32).toString('hex');
+  activeSessions.set(token, { createdAt: Date.now(), expiresAt: Date.now() + 30 * 86400000 });
+  addLog('INFO', 'Admin logged in successfully', 'AUTH');
+  res.json({ success: true, token });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim() || req.query.token;
+  if (token) activeSessions.delete(token);
+  res.json({ success: true });
+});
+
 app.get('/api/tunnel', (req, res) => {
   res.json({
     ...tunnelState,
@@ -1097,7 +1207,7 @@ app.get('/api/tunnel', (req, res) => {
   });
 });
 
-app.post('/api/tunnel/restart', (req, res) => {
+app.post('/api/tunnel/restart', requireAuth, (req, res) => {
   startRtmpTunnel();
   startWebTunnel();
   res.json({ success: true, tunnelState });
@@ -1127,11 +1237,11 @@ app.get('/api/flv-proxy/:streamName', (req, res) => {
   });
 });
 
-app.get('/api/files', (req, res) => {
+app.get('/api/files', requireAuth, (req, res) => {
   res.json(listUploadedFiles());
 });
 
-app.post('/api/files/upload', upload.single('file'), (req, res) => {
+app.post('/api/files/upload', requireAuth, upload.single('file'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file selected for upload' });
   }
@@ -1143,6 +1253,10 @@ app.post('/api/files/upload', upload.single('file'), (req, res) => {
 });
 
 app.get('/api/files/:id/download', (req, res) => {
+  const token = req.query.token || (req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+  if (!isValidSession(token)) {
+    return res.status(401).send('Unauthorized');
+  }
   const safeName = path.basename(req.params.id);
   const fullPath = path.join(UPLOADS_DIR, safeName);
   if (!fs.existsSync(fullPath)) {
@@ -1152,7 +1266,7 @@ app.get('/api/files/:id/download', (req, res) => {
   res.download(fullPath, downloadName);
 });
 
-app.put('/api/files/:id', (req, res) => {
+app.put('/api/files/:id', requireAuth, (req, res) => {
   const safeName = path.basename(req.params.id);
   const fullPath = path.join(UPLOADS_DIR, safeName);
   if (!fs.existsSync(fullPath)) {
@@ -1183,7 +1297,7 @@ app.put('/api/files/:id', (req, res) => {
   res.json({ success: true, files });
 });
 
-app.delete('/api/files/:id', (req, res) => {
+app.delete('/api/files/:id', requireAuth, (req, res) => {
   const safeName = path.basename(req.params.id);
   const fullPath = path.join(UPLOADS_DIR, safeName);
   if (fs.existsSync(fullPath)) {
@@ -1195,11 +1309,11 @@ app.delete('/api/files/:id', (req, res) => {
   res.json({ success: true, files });
 });
 
-app.get('/api/instances', (req, res) => {
+app.get('/api/instances', requireAuth, (req, res) => {
   res.json(Array.from(instances.values()).map(serializeInstance));
 });
 
-app.post('/api/instances', (req, res) => {
+app.post('/api/instances', requireAuth, (req, res) => {
   const {
     name,
     rtmpIngestKey,
@@ -1250,7 +1364,7 @@ app.post('/api/instances', (req, res) => {
   res.json(serializeInstance(newInst));
 });
 
-app.put('/api/instances/:id', (req, res) => {
+app.put('/api/instances/:id', requireAuth, (req, res) => {
   const inst = instances.get(req.params.id);
   if (!inst) return res.status(404).json({ error: 'Instance not found' });
 
@@ -1296,7 +1410,7 @@ app.put('/api/instances/:id', (req, res) => {
   res.json(serializeInstance(inst));
 });
 
-app.post('/api/instances/:id/scene-switch', (req, res) => {
+app.post('/api/instances/:id/scene-switch', requireAuth, (req, res) => {
   const inst = instances.get(req.params.id);
   if (!inst) return res.status(404).json({ error: 'Instance not found' });
 
@@ -1309,7 +1423,7 @@ app.post('/api/instances/:id/scene-switch', (req, res) => {
   });
 });
 
-app.delete('/api/instances/:id', (req, res) => {
+app.delete('/api/instances/:id', requireAuth, (req, res) => {
   const inst = instances.get(req.params.id);
   if (!inst) return res.status(404).json({ error: 'Instance not found' });
 
@@ -1322,7 +1436,7 @@ app.delete('/api/instances/:id', (req, res) => {
   res.json({ success: true });
 });
 
-app.post('/api/instances/:id/start', (req, res) => {
+app.post('/api/instances/:id/start', requireAuth, (req, res) => {
   const inst = instances.get(req.params.id);
   if (!inst) return res.status(404).json({ error: 'Instance not found' });
 
@@ -1334,7 +1448,7 @@ app.post('/api/instances/:id/start', (req, res) => {
   }
 });
 
-app.post('/api/instances/:id/start-dual-canvas', (req, res) => {
+app.post('/api/instances/:id/start-dual-canvas', requireAuth, (req, res) => {
   const inst = instances.get(req.params.id);
   if (!inst) return res.status(404).json({ error: 'Instance not found' });
 
@@ -1346,7 +1460,7 @@ app.post('/api/instances/:id/start-dual-canvas', (req, res) => {
   }
 });
 
-app.post('/api/instances/:id/stop', (req, res) => {
+app.post('/api/instances/:id/stop', requireAuth, (req, res) => {
   const inst = instances.get(req.params.id);
   if (!inst) return res.status(404).json({ error: 'Instance not found' });
 
@@ -1358,7 +1472,7 @@ app.post('/api/instances/:id/stop', (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/logs', (req, res) => {
+app.get('/api/logs', requireAuth, (req, res) => {
   const { level, search, limit } = req.query;
   let filtered = [...LOGS_BUFFER];
 
@@ -1381,14 +1495,16 @@ app.get('/api/logs', (req, res) => {
   });
 });
 
-app.post('/api/logs/clear', (req, res) => {
+app.post('/api/logs/clear', requireAuth, (req, res) => {
   LOGS_BUFFER.length = 0;
-  io.emit('logs:cleared');
+  for (const [, s] of io.sockets.sockets) {
+    if (s.authenticated) s.emit('logs:cleared');
+  }
   addLog('INFO', 'Logs buffer cleared by user', 'SYSTEM');
   res.json({ success: true });
 });
 
-app.get('/api/system/status', (req, res) => {
+app.get('/api/system/status', requireAuth, (req, res) => {
   const mem = process.memoryUsage();
   const totalMem = os.totalmem();
   const freeMem = os.freemem();
@@ -1419,13 +1535,44 @@ app.get('/api/system/status', (req, res) => {
   });
 });
 
+io.use((socket, next) => {
+  const authState = getAuthState();
+  if (!authState.configured) {
+    socket.authenticated = false;
+    return next();
+  }
+  const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+  socket.authenticated = Boolean(token && isValidSession(token));
+  next();
+});
+
 io.on('connection', (socket) => {
-  socket.emit('instances-update', Array.from(instances.values()).map(serializeInstance));
-  socket.emit('logs:history', LOGS_BUFFER.slice(-100));
-  socket.emit('files-update', listUploadedFiles());
   socket.emit('tunnel-update', tunnelState);
 
+  const sendProtectedState = () => {
+    socket.emit('instances-update', Array.from(instances.values()).map(serializeInstance));
+    socket.emit('logs:history', LOGS_BUFFER.slice(-100));
+    socket.emit('files-update', listUploadedFiles());
+  };
+
+  if (socket.authenticated || !getAuthState().configured) {
+    sendProtectedState();
+  } else {
+    socket.emit('auth-required');
+  }
+
+  socket.on('auth:authenticate', ({ token }) => {
+    if (isValidSession(token)) {
+      socket.authenticated = true;
+      sendProtectedState();
+      socket.emit('auth:success');
+    } else {
+      socket.emit('auth:failed', { error: 'Invalid or expired session token' });
+    }
+  });
+
   socket.on('binary-chunk-169', ({ instanceId, chunk }) => {
+    if (!socket.authenticated) return;
     const inst = instances.get(instanceId);
     if (inst && inst.proc169 && inst.proc169.stdin && inst.proc169.stdin.writable) {
       try {
@@ -1435,6 +1582,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('binary-chunk-916', ({ instanceId, chunk }) => {
+    if (!socket.authenticated) return;
     const inst = instances.get(instanceId);
     if (inst && inst.proc916 && inst.proc916.stdin && inst.proc916.stdin.writable) {
       try {
@@ -1444,6 +1592,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('client-color-switch', ({ instanceId, targetSceneId, reason }) => {
+    if (!socket.authenticated) return;
     const inst = instances.get(instanceId);
     if (inst && inst.autoSceneSwitch) {
       switchInstanceScene(inst, targetSceneId, reason || 'CLIENT COLOR DETECT');
@@ -1462,16 +1611,17 @@ server.listen(PORT, '0.0.0.0', () => {
   const codespaceUrl = codespaceName ? `https://${codespaceName}-${PORT}.${forwardingDomain}` : null;
 
   origLog('================================================================');
-  origLog('  ☁️ FREE-LIVE-24-7-BY-SLETOYT SKY CLOUD SERVER READY 🌸');
-  origLog(`  Local Container URL: http://0.0.0.0:${PORT} (or http://localhost:${PORT})`);
+  origLog('  ☁️ FREE-LIVE-24-7-BY-SLETOYT CLOUD STREAM STUDIO 🌸');
+  origLog(`  Local / Container URL: http://0.0.0.0:${PORT} (http://localhost:${PORT})`);
   if (isBotkeep) {
-    origLog(`  🌐 Botkeep Assigned: http://node7.botkeep.cloud:${PORT}`);
-    origLog(`  🌐 Botkeep Domain:   https://free-live.bot-keep.xyz (or your attached domain)`);
+    origLog(`  🌐 Botkeep Assigned:   http://node7.botkeep.cloud:${PORT}`);
+    origLog(`  🌐 Botkeep Domain:     https://free-live.bot-keep.xyz (or your attached domain)`);
   }
   if (codespaceUrl) {
-    origLog(`  🌐 Codespaces Web:   ${codespaceUrl}`);
+    origLog(`  🌐 Codespaces Web:     ${codespaceUrl}`);
   }
-  origLog(`  📡 RTMP Ingest Port: ${rtmpPort}`);
-  origLog(`  🎥 HTTP-FLV Port:    ${httpPort}`);
+  origLog(`  🔒 Password Protection: ENABLED (Reset via VPS: node reset-password.js)`);
+  origLog(`  📡 RTMP Ingest Port:   ${rtmpPort}`);
+  origLog(`  🎥 HTTP-FLV Port:      ${httpPort}`);
   origLog('================================================================');
 });

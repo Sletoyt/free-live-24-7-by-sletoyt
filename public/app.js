@@ -1,4 +1,51 @@
-const socket = io();
+function getAuthToken() {
+  return localStorage.getItem('sleto_admin_token') || '';
+}
+
+function setAuthToken(token) {
+  if (token) {
+    localStorage.setItem('sleto_admin_token', token);
+  } else {
+    localStorage.removeItem('sleto_admin_token');
+  }
+}
+
+const rawFetch = window.fetch;
+window.fetch = async function (input, init = {}) {
+  const token = getAuthToken();
+  init.headers = init.headers || {};
+  if (token) {
+    if (init.headers instanceof Headers) {
+      if (!init.headers.has('Authorization')) {
+        init.headers.set('Authorization', `Bearer ${token}`);
+      }
+    } else if (Array.isArray(init.headers)) {
+      init.headers.push(['Authorization', `Bearer ${token}`]);
+    } else {
+      if (!init.headers['Authorization']) {
+        init.headers['Authorization'] = `Bearer ${token}`;
+      }
+    }
+  }
+
+  const res = await rawFetch(input, init);
+  if (res.status === 401) {
+    try {
+      const clone = res.clone();
+      const data = await clone.json();
+      if (data && (data.code === 'AUTH_REQUIRED' || data.code === 'SETUP_REQUIRED')) {
+        handleAuthRequirement(data.code);
+      }
+    } catch (_) {}
+  }
+  return res;
+};
+
+const socket = io({
+  auth: {
+    token: getAuthToken()
+  }
+});
 
 let instances = [];
 let cloudFiles = [];
@@ -41,33 +88,83 @@ samplerCanvas.width = 12;
 samplerCanvas.height = 12;
 const samplerCtx = samplerCanvas.getContext('2d', { willReadFrequently: true });
 
+const THEMES = {
+  sky: {
+    name: 'Cute Sky',
+    icon: '🌸',
+    logo: '☁️',
+    pill: '🌸 Dual 16:9 + 9:16',
+    title: 'Sleto Sky 24/7 Studio',
+    shield: '🔒'
+  },
+  black: {
+    name: 'Modern Black',
+    icon: '⚡',
+    logo: '🖤',
+    pill: '⚡ Dual 16:9 + 9:16',
+    title: 'Sleto Black 24/7 Studio',
+    shield: '🛡️'
+  },
+  glass: {
+    name: 'Glass Effect',
+    icon: '💎',
+    logo: '🔮',
+    pill: '💎 Dual 16:9 + 9:16',
+    title: 'Sleto Glass 24/7 Studio',
+    shield: '💎'
+  },
+  nature: {
+    name: 'Emerald Nature',
+    icon: '🌿',
+    logo: '🍃',
+    pill: '🌿 Dual 16:9 + 9:16',
+    title: 'Sleto Nature 24/7 Studio',
+    shield: '🍃'
+  },
+  white: {
+    name: 'Pure White',
+    icon: '☀️',
+    logo: '🕊️',
+    pill: '☀️ Dual 16:9 + 9:16',
+    title: 'Sleto White 24/7 Studio',
+    shield: '🔒'
+  }
+};
+
 function initTheme() {
-  const saved = localStorage.getItem('sleto_sky_theme') || 'dark';
+  const saved = localStorage.getItem('sleto_theme') || 'sky';
   applyTheme(saved);
-  const btn = document.getElementById('themeToggleBtn');
-  if (btn) {
-    btn.addEventListener('click', () => {
-      const current = document.documentElement.getAttribute('data-theme') || 'dark';
-      const next = current === 'dark' ? 'light' : 'dark';
-      applyTheme(next);
-      localStorage.setItem('sleto_sky_theme', next);
+  const sel = document.getElementById('themeSelector');
+  if (sel) {
+    sel.value = THEMES[saved] ? saved : 'sky';
+    sel.addEventListener('change', (e) => {
+      applyTheme(e.target.value);
     });
   }
 }
 
-function applyTheme(theme) {
-  document.documentElement.setAttribute('data-theme', theme);
-  const icon = document.getElementById('themeToggleIcon');
-  const label = document.getElementById('themeToggleLabel');
-  if (icon && label) {
-    if (theme === 'dark') {
-      icon.textContent = '☀️';
-      label.textContent = 'Light Sky';
-    } else {
-      icon.textContent = '🌙';
-      label.textContent = 'Dark Sky';
-    }
-  }
+function applyTheme(themeKey) {
+  const config = THEMES[themeKey] || THEMES.sky;
+  document.documentElement.setAttribute('data-theme', themeKey);
+  localStorage.setItem('sleto_theme', themeKey);
+
+  const sel = document.getElementById('themeSelector');
+  if (sel && sel.value !== themeKey) sel.value = themeKey;
+
+  const pickerIcon = document.getElementById('themePickerIcon');
+  if (pickerIcon) pickerIcon.textContent = config.icon;
+
+  const brandLogo = document.getElementById('brandThemeLogo');
+  if (brandLogo) brandLogo.textContent = config.logo;
+
+  const brandTitle = document.getElementById('brandTitleText');
+  if (brandTitle) brandTitle.textContent = config.title;
+
+  const brandPill = document.getElementById('brandSubPill');
+  if (brandPill) brandPill.textContent = config.pill;
+
+  const gateIcon = document.getElementById('authGateIcon');
+  if (gateIcon) gateIcon.textContent = config.shield;
 }
 
 initTheme();
@@ -194,6 +291,23 @@ socket.on('connect', () => {
   document.getElementById('socketDot')?.classList.add('online');
   const txt = document.getElementById('socketText');
   if (txt) txt.textContent = 'Connected';
+  const token = getAuthToken();
+  if (token) {
+    socket.emit('auth:authenticate', { token });
+  }
+});
+
+socket.on('auth-required', () => {
+  handleAuthRequirement('AUTH_REQUIRED');
+});
+
+socket.on('auth:failed', () => {
+  handleAuthRequirement('AUTH_REQUIRED');
+});
+
+socket.on('auth:success', () => {
+  document.getElementById('authGateModal')?.classList.add('hidden');
+  document.getElementById('authLogoutBtn')?.classList.remove('hidden');
 });
 
 socket.on('disconnect', () => {
@@ -1917,5 +2031,156 @@ async function fetchSystemHealth() {
   } catch (_) {}
 }
 
+function handleAuthRequirement(code) {
+  const modal = document.getElementById('authGateModal');
+  const setupForm = document.getElementById('authSetupForm');
+  const loginForm = document.getElementById('authLoginForm');
+  const alertBanner = document.getElementById('authAlertBanner');
+
+  if (!modal) return;
+  modal.classList.remove('hidden');
+
+  if (alertBanner) {
+    alertBanner.textContent = '';
+    alertBanner.classList.add('hidden');
+  }
+
+  if (code === 'SETUP_REQUIRED') {
+    setupForm?.classList.remove('hidden');
+    loginForm?.classList.add('hidden');
+    const title = document.getElementById('authGateTitle');
+    const sub = document.getElementById('authGateSubtitle');
+    if (title) title.textContent = '🌸 First-Run Master Setup';
+    if (sub) sub.textContent = 'Welcome! Create your Master Admin Password to protect your live stream dashboard.';
+  } else {
+    setupForm?.classList.add('hidden');
+    loginForm?.classList.remove('hidden');
+    const title = document.getElementById('authGateTitle');
+    const sub = document.getElementById('authGateSubtitle');
+    if (title) title.textContent = '🔒 Master Security Gate';
+    if (sub) sub.textContent = 'Enter your Master Admin Password to access your 24/7 live channels and settings.';
+  }
+}
+
+async function checkAuthStatus() {
+  try {
+    const res = await rawFetch('/api/auth/status', {
+      headers: {
+        'Authorization': `Bearer ${getAuthToken()}`
+      }
+    });
+    const data = await res.json();
+    const modal = document.getElementById('authGateModal');
+    const logoutBtn = document.getElementById('authLogoutBtn');
+
+    if (!data.configured) {
+      handleAuthRequirement('SETUP_REQUIRED');
+      logoutBtn?.classList.add('hidden');
+    } else if (!data.authenticated) {
+      handleAuthRequirement('AUTH_REQUIRED');
+      logoutBtn?.classList.add('hidden');
+    } else {
+      modal?.classList.add('hidden');
+      logoutBtn?.classList.remove('hidden');
+      const token = getAuthToken();
+      if (token) {
+        socket.emit('auth:authenticate', { token });
+      }
+    }
+  } catch (_) {}
+}
+
+function initAuthHandlers() {
+  const setupForm = document.getElementById('authSetupForm');
+  const loginForm = document.getElementById('authLoginForm');
+  const logoutBtn = document.getElementById('authLogoutBtn');
+  const alertBanner = document.getElementById('authAlertBanner');
+
+  function showAuthAlert(msg) {
+    if (alertBanner) {
+      alertBanner.textContent = msg;
+      alertBanner.classList.remove('hidden');
+    }
+  }
+
+  setupForm?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const p1 = document.getElementById('setupPasswordInput')?.value?.trim();
+    const p2 = document.getElementById('setupPasswordConfirmInput')?.value?.trim();
+
+    if (!p1 || p1.length < 4) {
+      showAuthAlert('Password must be at least 4 characters long.');
+      return;
+    }
+    if (p1 !== p2) {
+      showAuthAlert('Passwords do not match. Please retype carefully.');
+      return;
+    }
+
+    try {
+      const res = await rawFetch('/api/auth/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: p1 })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showAuthAlert(data.error || 'Failed to setup password');
+        return;
+      }
+      setAuthToken(data.token);
+      document.getElementById('authGateModal')?.classList.add('hidden');
+      logoutBtn?.classList.remove('hidden');
+      showToast('🎉 Master Password Created! Welcome to Sleto Studio', 'success');
+      socket.emit('auth:authenticate', { token: data.token });
+      fetchSystemHealth();
+    } catch (err) {
+      showAuthAlert(err.message || 'Setup request failed');
+    }
+  });
+
+  loginForm?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const pwd = document.getElementById('loginPasswordInput')?.value?.trim();
+    if (!pwd) {
+      showAuthAlert('Please enter your master password.');
+      return;
+    }
+
+    try {
+      const res = await rawFetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pwd })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showAuthAlert(data.error || 'Incorrect master password');
+        return;
+      }
+      setAuthToken(data.token);
+      document.getElementById('authGateModal')?.classList.add('hidden');
+      logoutBtn?.classList.remove('hidden');
+      showToast('🔓 Studio Unlocked Successfully', 'success');
+      socket.emit('auth:authenticate', { token: data.token });
+      fetchSystemHealth();
+    } catch (err) {
+      showAuthAlert(err.message || 'Login request failed');
+    }
+  });
+
+  logoutBtn?.addEventListener('click', async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (_) {}
+    setAuthToken('');
+    handleAuthRequirement('AUTH_REQUIRED');
+    logoutBtn.classList.add('hidden');
+    showToast('🔒 Studio Locked', 'info');
+  });
+}
+
 updateTunnelUiBanner();
 fetchSystemHealth();
+initAuthHandlers();
+checkAuthStatus();

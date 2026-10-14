@@ -20,11 +20,11 @@
   <div class="app-shell">
     <header class="topbar">
       <div class="topbar-brand">
-        <div class="brand-logo" aria-hidden="true">☁️</div>
+        <div class="brand-logo" id="brandThemeLogo" aria-hidden="true">☁️</div>
         <div class="brand-titles">
           <div class="brand-row">
-            <h1>Sleto Sky 24/7 Studio</h1>
-            <span class="kawaii-pill">Dual 16:9 + 9:16</span>
+            <h1 id="brandTitleText">Sleto Sky 24/7 Studio</h1>
+            <span class="kawaii-pill" id="brandSubPill">Dual 16:9 + 9:16</span>
           </div>
           <p class="brand-sub">Lightweight Auto Color-Detect Scene Switcher &amp; Cloud Playout</p>
         </div>
@@ -61,14 +61,23 @@
       </nav>
 
       <div class="topbar-actions">
-        <button id="themeToggleBtn" class="btn btn-ghost btn-sm" title="Switch Dark / Light Theme">
-          <span id="themeToggleIcon">☀️</span>
-          <span id="themeToggleLabel">Light Sky</span>
-        </button>
+        <div class="theme-picker-wrap">
+          <label for="themeSelector" class="theme-picker-label" id="themePickerIcon" title="Choose Studio Theme">🌸</label>
+          <select id="themeSelector" class="sky-select theme-select-box" title="Select Studio Theme">
+            <option value="sky">🌸 Cute Sky (Sakura)</option>
+            <option value="black">🖤 Modern Black (Simple)</option>
+            <option value="glass">💎 Glass Effect (Clear)</option>
+            <option value="nature">🌿 Emerald Nature</option>
+            <option value="white">☀️ Pure White (Minimal)</option>
+          </select>
+        </div>
         <div class="socket-pill" id="socketStatusPill">
           <span class="status-dot online" id="socketDot"></span>
           <span id="socketText">Connected</span>
         </div>
+        <button id="authLogoutBtn" class="btn btn-ghost btn-sm hidden" title="Lock Studio / Logout Admin Session">
+          🔒 Lock
+        </button>
         <button id="openNewInstanceModalBtn" class="btn btn-primary">
           <span>＋ New Live Channel</span>
         </button>
@@ -633,6 +642,75 @@
         <div class="modal-footer">
           <button type="button" id="cancelAddSourceBtn" class="btn btn-ghost">Cancel</button>
           <button type="submit" class="btn btn-sakura">＋ Add to 16:9 &amp; 9:16</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Master Auth Gate Modal (First-Run Setup & Login) -->
+  <div id="authGateModal" class="modal-backdrop auth-gate-backdrop hidden">
+    <div class="modal-card auth-card">
+      <div class="auth-header">
+        <div class="auth-badge-icon" id="authGateIcon">🔒</div>
+        <h2 id="authGateTitle">Master Security Gate</h2>
+        <p class="auth-subtitle" id="authGateSubtitle">
+          Free-Live-24-7 Studio is running on a public link. Authenticate to manage your live streams.
+        </p>
+      </div>
+
+      <div id="authAlertBanner" class="auth-alert hidden"></div>
+
+      <!-- State 1: First-Run Setup Wizard -->
+      <form id="authSetupForm" class="auth-form hidden">
+        <div class="setup-notice">
+          <strong>🎉 Welcome to your 24/7 Studio!</strong>
+          <p>Please create your Master Admin Password. This prevents unauthorized visitors on the internet from changing your streams or keys.</p>
+        </div>
+
+        <div class="form-row">
+          <label for="setupPasswordInput">Create Master Password</label>
+          <input type="password" id="setupPasswordInput" class="sky-input" placeholder="Enter a secure password (min 4 chars)" required minlength="4" autocomplete="new-password" />
+        </div>
+
+        <div class="form-row">
+          <label for="setupPasswordConfirmInput">Confirm Master Password</label>
+          <input type="password" id="setupPasswordConfirmInput" class="sky-input" placeholder="Repeat your password" required minlength="4" autocomplete="new-password" />
+        </div>
+
+        <div class="vps-reset-callout">
+          <span class="callout-icon">🛡️</span>
+          <div>
+            <strong>VPS Terminal Recovery:</strong>
+            <p>If you ever forget this password, it can <strong>ONLY</strong> be reset from your VPS terminal: <code>node reset-password.js</code></p>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block btn-lg" style="margin-top: 14px;">
+          <span>🚀 Set Master Password &amp; Enter Studio</span>
+        </button>
+      </form>
+
+      <!-- State 2: Login Screen -->
+      <form id="authLoginForm" class="auth-form hidden">
+        <div class="form-row">
+          <label for="loginPasswordInput">Master Admin Password</label>
+          <input type="password" id="loginPasswordInput" class="sky-input" placeholder="Enter your Master Admin Password" required autocomplete="current-password" />
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block btn-lg" style="margin-top: 14px;">
+          <span>🔓 Unlock Studio</span>
+        </button>
+
+        <div class="forgot-pwd-accordion">
+          <details>
+            <summary>🔑 Forgot Master Password?</summary>
+            <div class="forgot-pwd-content">
+              <p>For your security against unauthorized access on public domains, password recovery is <strong>disabled on the web</strong>.</p>
+              <p>To reset your password, connect to your server/VPS terminal and run:</p>
+              <pre><code>node reset-password.js</code></pre>
+              <p>Or use: <code>npm run reset-password</code></p>
+            </div>
+          </details>
         </div>
       </form>
     </div>

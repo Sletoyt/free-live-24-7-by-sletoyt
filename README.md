@@ -1,217 +1,172 @@
-<div align="center">
-
 # ☁️ free-live-24-7-by-sletoyt 🌸
 
-### **Ultra-Lightweight Dual 16:9 & 9:16 Cloud OBS • Auto Color-Detect Scene Switcher • 24/7 Playout**
+> **Ultra-Lightweight 24/7 Cloud Streaming Studio • Dual 16:9 & 9:16 Playout • Master Password Security • Free Random Public HTTPS Domain • 5 Theme System**
 
-[![Repository](https://img.shields.io/badge/GitHub-free--live--24--7--by--sletoyt-38bdf8?style=for-the-badge&logo=github)](https://github.com/sletoyt/free-live-24-7-by-sletoyt)
-[![Dual Stream](https://img.shields.io/badge/Dual_Live-16%3A9_%2B_9%3A16_Simultaneous-f472b6?style=for-the-badge)](#)
-[![Theme](https://img.shields.io/badge/Theme-Dark_Sky_%26_Sakura-0ea5e9?style=for-the-badge)](#)
-[![License](https://img.shields.io/badge/License-MIT-10b981?style=for-the-badge)](LICENSE)
+[![GitHub Repository](https://img.shields.io/badge/GitHub-free--live--24--7--by--sletoyt-38bdf8?style=for-the-badge&logo=github)](https://github.com/sletoyt/free-live-24-7-by-sletoyt)
+[![Dual Stream](https://img.shields.io/badge/Dual_Playout-16%3A9_%2B_9%3A16_Live-f472b6?style=for-the-badge)](#)
+[![Themes](https://img.shields.io/badge/Themes-5_Unique_Styles-10b981?style=for-the-badge)](#)
+[![Security](https://img.shields.io/badge/Master_Password-VPS_Reset_Only-amber?style=for-the-badge)](#)
+[![License](https://img.shields.io/badge/License-MIT-0ea5e9?style=for-the-badge)](LICENSE)
 
-**Send your PC Window feed and voiceover from OBS Studio once — `free-live-24-7-by-sletoyt` handles the rest! It automatically triggers smart scene transitions based on screen color or connection health and broadcasts to both `16:9 Landscape` and `9:16 Vertical Shorts` simultaneously.**
-
----
-
-### 🌟 Key Highlights at a Glance
-| Feature | Description |
-| :--- | :--- |
-| **Simultaneous Dual Broadcast** | Stream to YouTube Landscape (`16:9`) and YouTube Shorts (`9:16`) at the same time. |
-| **Smart Color Switcher** | Auto-switches scenes when a specific screen color is detected (e.g., pause screens). |
-| **Network Fail-Safe** | Auto-displays an error scene if your PC disconnects, keeping the 24/7 stream alive. |
-| **Zero-Config OBS Tunnel** | Built-in TCP tunneling solves firewall and port-forwarding issues out of the box. |
-| **Ultra-Low Resource Usage**| Optimized pipeline consuming minimal CPU and RAM on VPS / Cloud instances. |
-
-</div>
+Send your **Window Feed + Voiceover** from OBS Studio once — **`free-live-24-7-by-sletoyt`** handles the rest in the cloud! It automatically triggers scene transitions based on screen color detection or network dropouts and streams to both **YouTube Landscape (16:9)** and **YouTube Shorts / TikTok (9:16)** simultaneously.
 
 ---
 
-## 🚀 1. Installation & Cloud Setup Guide
+## 🌟 Key Highlights
 
-You can deploy and run this tool within minutes on **Botkeep**, **Google Colab**, **Ubuntu / Debian VPS**, or directly inside **GitHub Codespaces**.
-
----
-
-### Method A: Botkeep Cloud Hosting (Node.js 22)
-
-1. In your **Botkeep** dashboard (`botkeep.cloud`), create a new Node.js app and link your GitHub repo:
-   ```text
-   https://github.com/sletoyt/free-live-24-7-by-sletoyt
-   ```
-2. Botkeep automatically runs `npm install` and executes `npm start`.
-3. The server automatically detects Botkeep's dynamic **`SERVER_PORT`** and binds to `0.0.0.0`.
-4. **Access your Web Dashboard:**
-   - Use your assigned endpoint under the **Network** tab (e.g. `http://node7.botkeep.cloud:40325`).
-   - Or open your custom domain under the **Domains** tab (e.g. `https://free-live.bot-keep.xyz`).
-   - Or click the **`Auto Public Web Link`** (`https://...loca.lt` / `https://...a.pinggy.link`) printed right in the Botkeep console!
-5. **Connect Local OBS Studio:**
-   - In your PC OBS Studio, go to `Settings -> Stream -> Custom`.
-   - Set **Server** to the **Public OBS RTMP Server Link** (`rtmp://...a.pinggy.link:PORT/live`) printed in the Botkeep console or shown on the dashboard.
-   - Set **Stream Key** to `live_sleto` (or your configured channel key) and click **Start Streaming**!
+- **🔒 Master Admin Password Security:** First-run web wizard lets you set your master password. No unauthorized visitor can modify your stream keys or tamper with your live broadcast.
+- **🛡️ VPS-Only Password Reset:** Web password recovery is deliberately disabled on public links to prevent hijacking. The password can **ONLY** be reset via direct VPS terminal access (`node reset-password.js`).
+- **🌐 Free Random Public HTTPS Domain:** Built-in web tunnel generates an instant, public HTTPS address (`https://...loca.lt` / `https://...a.pinggy.link`) allowing you to control your studio from any phone or browser worldwide.
+- **🎨 5 Beautiful Themes with Adaptive Icons:**
+  - 🌸 **Cute Sky (Sakura):** Soft dark sky aesthetic with sakura accents (Icons: ☁️ / 🌸)
+  - 🖤 **Modern Black (Simple):** Clean pitch-black minimalist design (Icons: ⚡ / 🖤)
+  - 💎 **Glass Effect (Clear):** Frosted glassmorphism with crystal violet glow (Icons: 💎 / 🔮)
+  - 🌿 **Emerald Nature:** Deep forest green and calming botanical tones (Icons: 🌿 / 🍃)
+  - ☀️ **Pure White (Minimal):** Crisp high-contrast clean white layout (Icons: ☀️ / 🕊️)
+- **📺📱 Dual 16:9 & 9:16 Playout:** Broadcast to horizontal YouTube and vertical Shorts/TikTok concurrently with synchronized scene switching.
+- **🤖 Smart Auto Color & Signal Switcher:**
+  - `🟢 Default Scene:` Active gameplay or main screen feed.
+  - `🎨 Color-Detect Scene:` Automatically switches when the screen matches a specified HEX color (e.g., game pause, loading screen).
+  - `📡 Network Error Scene:` Automatically takes over if your local OBS crashes or disconnects, preserving your 24/7 stream uptime.
+- **📁 Cloud File Manager:** Upload and manage background music, brand logos, video loops, and overlay graphics directly from the web panel.
 
 ---
 
-### Method B: Google Colab (Free Cloud Playout)
+## 🚀 Installation & Setup
 
-Open a new notebook in **Google Colab** and run this single code cell:
+### Method 1: Docker (Recommended)
 
-```python
-!git clone https://github.com/sletoyt/free-live-24-7-by-sletoyt.git
-%cd free-live-24-7-by-sletoyt
-!sudo apt-get update && sudo apt-get install -y ffmpeg openssh-client
-!npm install
-!npm start
-```
-
-- In the cell output, click the generated **`🌐 Public Web Dashboard`** link (`https://...loca.lt` / `https://...a.pinggy.link`).
-- In OBS Studio on your PC, paste the generated **`🔗 Public OBS RTMP Server`** (`rtmp://...a.pinggy.link:PORT/live`) and click **Start Streaming**!
-
----
-
-### Method C: GitHub Codespaces (Auto Port Forwarding & OBS Tunnel)
-
-Paste the following command directly into your GitHub Codespaces terminal:
+Run the entire studio with one command using Docker:
 
 ```bash
-cd /workspaces/free-live-24-7-by-sletoyt
-docker compose down 2>/dev/null || true
-rm -rf free-live-24-7-by-sletoyt
-git fetch origin main && git reset --hard origin/main
-sudo apt-get update && sudo apt-get install -y ffmpeg openssh-client
-npm install
-npm start
-```
-
-> **Note:** Once `npm start` executes, your terminal will display the **`Codespaces Web UI URL`** along with a ready-to-use **`Public OBS RTMP Server Link`** (`rtmp://...a.pinggy.link:PORT/live`).
-
----
-
-### Method D: Ubuntu / Debian VPS via Docker Compose (Recommended)
-
-Log in to your VPS terminal and run:
-
-```bash
+# 1. Clone the repository
 git clone https://github.com/sletoyt/free-live-24-7-by-sletoyt.git
 cd free-live-24-7-by-sletoyt
+
+# 2. Build and start the container
 docker compose up -d --build
 ```
 
-Access the Web Control Panel in your browser:
-```text
-http://YOUR_VPS_IP:3000
-```
+- **Open in Browser:** Open `http://YOUR_VPS_IP:3000` (or check the container logs for your free public HTTPS domain).
+- **View Container Logs:**
+  ```bash
+  docker compose logs -f
+  ```
+- **Stop the Studio:**
+  ```bash
+  docker compose down
+  ```
 
 ---
 
-### Method E: Ubuntu / Debian VPS Direct Installation (Without Docker)
+### Method 2: Non-Docker Installation (Node.js)
+
+To run natively on your Linux VPS (Ubuntu / Debian), Mac, or Windows server:
 
 ```bash
-# 1. Update packages and install dependencies
-sudo apt-get update && sudo apt-get install -y nodejs npm ffmpeg openssh-client
+# 1. Update system packages & install FFmpeg, Node.js and Git
+sudo apt-get update && sudo apt-get install -y nodejs npm ffmpeg openssh-client git
 
 # 2. Clone the repository
 git clone https://github.com/sletoyt/free-live-24-7-by-sletoyt.git
 cd free-live-24-7-by-sletoyt
 
-# 3. Install packages and start the engine
+# 3. Install dependencies
 npm install
+
+# 4. Start the studio
 npm start
 ```
 
-Open `http://YOUR_VPS_IP:3000` in your web browser.
+### Running 24/7 in Background (via PM2)
+
+To keep your studio running continuously 24/7 without terminal interruptions:
+
+```bash
+sudo npm install -g pm2
+pm2 start server.js --name "sleto-live-24-7"
+pm2 save
+pm2 startup
+```
 
 ---
 
-## ✨ 2. Key Features
+## 🔐 Master Password & Security Setup
 
-### 🌙 1. Dark Sky & Sakura Theme (with Light Mode Toggle)
-- Features a clean, eye-friendly **Midnight Dark Sky & Sakura Theme** out of the box.
-- Seamlessly toggle between dark and light modes using the top navigation bar switch.
+1. **First-Run Web Setup:**
+   - When you open the web dashboard for the first time, the **Master Security Gate** setup wizard will appear.
+   - Enter your desired Master Admin Password and click **Set Master Password & Enter Studio**.
+   - Your password is protected with salt-hashed PBKDF2 (SHA-512, 100,000 iterations).
 
-### 🔗 2. Built-in Automatic OBS RTMP Tunnel (Fixes `Failed to Connect`)
-- Cloud platforms (like Botkeep, Google Colab, GitHub Codespaces, or restricted VPS setups) often block port `1935`, causing OBS to throw `Failed to connect to server`.
-- An automatic **Public TCP Tunnel (`rtmp://...a.pinggy.link:PORT/live`)** is created and displayed directly on the dashboard. Copy this address into OBS to connect immediately without port forwarding.
+2. **How to Reset Master Password from VPS Terminal:**
+   If you ever forget your password, you can securely reset or clear it from your VPS terminal:
 
-### ⚡ 3. Ultra-Lightweight Architecture (Low CPU & RAM Footprint)
-- Engineered for budget-friendly cloud instances:
-  - **FFmpeg Engine:** Configured with `ultrafast` and `zerolatency` profiles.
-  - **Color Detector:** Checks an ultra-efficient `8x8` pixel grid at `1 FPS`, resulting in nearly `0%` CPU utilization.
-  - **Browser Optimization:** Throttles canvas rendering automatically whenever you navigate away from the Studio tab.
+   ```bash
+   # Option A: Interactive prompt
+   node reset-password.js
 
-### 🎬 4. Dynamic Multi-Scene Engine
-Create unlimited scenes and switch between them on the fly while streaming live.
+   # Option B: Pass new password directly
+   node reset-password.js "MyNewSecurePassword123"
 
-```
-                          ┌───► 🟢 Default Scene (Active gameplay / main feed)
-                          │
-Incoming Video Stream ────┼───► 🎨 Color-Detect Scene (Matches HEX code -> Pause/Overlay)
-                          │
-                          └───► 📡 Network Error Scene (Triggered if OBS drops signal)
-```
+   # Option C: Clear password to trigger setup wizard again
+   node reset-password.js --clear
 
-1. **🟢 Default Scene (Max 1):** Your primary active live scene when no trigger colors are present.
-2. **🎨 Color-Detect Scene (Multiple):** Set any HEX color code (e.g., `#000000` or `#38bdf8`). When your screen matches that color, the live broadcast automatically transitions to this scene. Once the color clears, it returns to the Default Scene.
-3. **📡 Network Error Scene:** If your local OBS crashes or loses internet connection, this scene takes over immediately to keep your YouTube stream alive. Once OBS reconnects, it smoothly returns to your Default Scene.
+   # Option D: Using npm script
+   npm run reset-password
+   ```
 
-### 📺📱 5. Dual 16:9 & 9:16 Playout (Side-by-Side Canvas Editor)
-- **Two Simultaneous Streams:** Pushes video to both **16:9 (Landscape YouTube)** and **9:16 (Vertical YouTube Shorts)** stream keys simultaneously.
-- **Shared Sources, Independent Layouts:** Add a source (Window Capture, Logo, Video Clip, Text, BGM) once, and it appears on both canvases. Position, scale, and adjust it independently for horizontal and vertical layouts.
-- **Synchronized Transitions:** Any scene switch happens synchronously across both aspect ratios.
-
-```
-+---------------------------------------+   +-------------------+
-|            16:9 Landscape             |   |   9:16 Vertical   |
-|                                       |   |                   |
-|   [ Game Feed / Window Capture ]      |   |   [ Camera Feed ] |
-|                                       |   |                   |
-|                                       |   |   [ Game Feed ]   |
-|   [ Overlay / BGM ]    [ Logo ]       |   |   [ Chat / Logo ] |
-+---------------------------------------+   +-------------------+
-```
-
-### 📁 6. Built-in Cloud Asset Manager
-- Upload and manage your **Background Music (`.mp3`, `.wav`)**, **Brand Logos (`.png`, `.gif`)**, and **Video Loops (`.mp4`, `.webm`)** right from the cloud dashboard.
-- Download, rename, delete, or link files into your scenes with one click.
-
-### 📖 7. Beginner-Friendly Onboarding
-- Includes an integrated **`📖 Guide`** tab with step-by-step instructions designed to help first-time streamers get up and running without technical roadblocks.
+   > **Note:** For security on public domains, password recovery is intentionally not provided over the web.
 
 ---
 
-## ⚙️ 3. How It Works (Architecture Pipeline)
+## 📡 Connecting Local OBS Studio
 
-```mermaid
-flowchart TD
-    A["🖥️ Local PC OBS Studio<br/>(Window Capture + Mic Audio)"] -->|"RTMP Stream (Direct IP or Built-in Tunnel)"| B["☁️ Sleto Sky Cloud Server<br/>(Port 1935 Ingest)"]
-    B --> C{"🤖 Auto Scene & Color Engine"}
-    C -->|"Standard Video Signal"| D["🟢 Default Scene (Primary Feed)"]
-    C -->|"Screen Matches Trigger HEX Color"| E["🎨 Color-Detect Scene (e.g. Pause Overlay)"]
-    C -->|"OBS Disconnected / Network Loss"| F["📡 Network Error Scene (Fail-Safe)"]
-    D & E & F --> G["🎛️ Dual Aspect-Ratio Compositor"]
-    G -->|"16:9 Layout + Landscape Stream Key"| H["📺 YouTube 16:9 Landscape Live"]
-    G -->|"9:16 Layout + Vertical Stream Key"| I["📱 YouTube 9:16 Vertical Shorts Live"]
-```
-
-### Step-by-Step Workflow:
-
-1. **Input (Sending Feed from Local OBS):**
-   - Open OBS Studio on your local PC. Add your game/window capture and microphone.
-   - Go to `Settings -> Stream -> Service: Custom`.
-   - Paste the **OBS Server URL** and **Stream Key** (`live_sleto`) shown on your cloud dashboard, then click **Start Streaming**.
-
-2. **Automated Scene Switching:**
-   - The cloud engine continuously samples the incoming stream.
-   - If the screen color matches a configured HEX value (e.g., a menu or pause screen), both streams shift to your designated **Color-Detect Scene**.
-   - When normal gameplay resumes, the stream seamlessly reverts to the **Default Scene**.
-   - If your home connection drops, the **Network Error Scene** activates immediately, ensuring your YouTube stream does not terminate.
-
-3. **Dual Live Broadcast Output:**
-   - All sources are rendered independently onto `16:9` and `9:16` target frames and streamed to their respective endpoints concurrently.
+1. Open **OBS Studio** on your PC.
+2. Go to **Settings &rarr; Stream**:
+   - **Service:** `Custom...`
+   - **Server:** Copy the **OBS Server URL** (`rtmp://...a.pinggy.link:PORT/live` or `rtmp://YOUR_VPS_IP:1935/live`) from your studio dashboard.
+   - **Stream Key:** Enter your channel ingest key (default: `live_sleto`).
+3. Click **Start Streaming** in OBS.
+4. Your incoming video and audio are received by the cloud studio and automatically routed to your 16:9 and 9:16 outputs!
 
 ---
 
-## 🤝 4. Credits & Collaboration
+## 🎬 Scene System Overview
 
-This project (**`free-live-24-7-by-sletoyt`**) was envisioned, designed, and developed collaboratively by **SletoYT** and **AI**.
+```text
+                           ┌───► 🟢 Default Scene (Active gameplay / main feed)
+                           │
+Incoming Video Stream ────┼───► 🎨 Color-Detect Scene (Matches HEX color -> Pause / Overlay)
+                           │
+                           └───► 📡 Network Error Scene (Activates if OBS signal drops)
+```
 
-The core ideas—including automatic color-detect scene transitions, automatic network error fail-safes, and simultaneous dual 16:9 + 9:16 cloud streaming—were conceptualized by **SletoYT** to create a lightweight, robust, 24/7 cloud streaming solution.
+1. **🟢 Default Scene (Normal State):** Displays incoming OBS gameplay with customized overlays and layout.
+2. **🎨 Color-Detect Scene (Pause / Break):** Continuously monitors the stream frame. When the screen matches the designated HEX color code (e.g., `#000000`), it automatically transitions to this scene. Once normal screen content returns, it shifts back to Default.
+3. **📡 Network Error Scene (Fail-Safe):** If your local PC loses connection or OBS stops, this scene automatically takes over to keep your 24/7 live streams running smoothly on YouTube.
+
+---
+
+## 🎨 5 Themes Showcase
+
+| Theme | Icon | Look & Feel |
+| :--- | :---: | :--- |
+| **Cute Sky** | 🌸 | Soft midnight blue and sakura pink accents with cozy typography. |
+| **Modern Black** | ⚡ | Deep pitch black minimalist theme with sleek dark cards and amber highlights. |
+| **Glass Effect** | 💎 | Crystal glassmorphism with blurred translucent layers and neon violet glows. |
+| **Emerald Nature** | 🌿 | Calming forest greens, jade elements, and organic botanical hues. |
+| **Pure White** | ☀️ | Clean high-contrast minimalist white with crisp borders and slate accents. |
+
+---
+
+## 🤝 Credits & Collaboration
+
+This project (**`free-live-24-7-by-sletoyt`**) was envisioned, designed, and developed through pair-programming collaboration between **SletoYT** and **Antigravity**.
+
+The system architecture—featuring automated color-detection scene switching, network fail-safe fallback, dual 16:9 + 9:16 simultaneous playout, and public web tunneling—was conceived by **SletoYT** to provide a lightweight, accessible, and robust 24/7 cloud live-streaming solution.
+
+---
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE).

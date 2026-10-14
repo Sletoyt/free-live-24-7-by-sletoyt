@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "reset-password": "node reset-password.js"
   },
   "keywords": [
     "free-live-24-7-by-sletoyt",
